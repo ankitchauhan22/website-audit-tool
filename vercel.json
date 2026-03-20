@@ -7,12 +7,12 @@
       "config": {
         "runtime": "python3.11",
         "includeFiles": [
+          "public/**",
           "audit_tool/**",
+          "templates/**",
           "detectors/**",
           "services/**",
           "pdf/**",
-          "templates/**",
-          "public/**",
           "scanner.py"
         ]
       }
@@ -21,7 +21,7 @@
   "routes": [
     {
       "src": "/static/(.*)",
-      "dest": "/$1"
+      "dest": "/public/$1"
     },
     {
       "handle": "filesystem"
