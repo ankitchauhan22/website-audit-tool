@@ -31,7 +31,7 @@ def create_app() -> Flask:
         __name__,
         template_folder=str(project_root / "templates"),
         static_folder=str(project_root / "public"),
-        static_url_path="",
+        static_url_path="/static",
     )
 
     from .views import main_bp
