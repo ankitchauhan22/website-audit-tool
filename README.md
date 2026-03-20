@@ -49,7 +49,7 @@ python3 app.py
 ## Detection strategy
 
 - The audit is passive only. It relies on public HTML, headers, asset paths, cookie names, and generator metadata.
-- CMS detection includes traditional platforms, proprietary builders, headless CMS products, and government-focused platforms such as SharePoint, Sitefinity, CivicPlus, and Granicus products when strong public signals are present.
+- CMS detection includes traditional platforms, proprietary builders, headless CMS products, and government-focused platforms such as SharePoint, Sitefinity, CivicPlus, CivicLive, ProdCity, TerminalFour, and Granicus products when strong public signals are present.
 - The built-in profiler now groups detections into stable presentation sections instead of a long mixed list.
 - Technology signatures live in [detectors/stack_detector.py](/var/www/website-audit-tool/detectors/stack_detector.py) and can be extended safely over time.
 - The CMS classifier lives in [detectors/cms_detector.py](/var/www/website-audit-tool/detectors/cms_detector.py) and produces a ranked primary/secondary CMS summary.
@@ -72,19 +72,28 @@ python3 app.py
 
 ## Deploying To Vercel
 
-This project is now set up to fit Vercel's current Flask guidance:
+This project is structured to fit Vercel's Flask and Python deployment model:
 
-- Vercel can deploy a Flask app with zero configuration when an `app` object is exported from `app.py`.
-- Static assets should live in `public/**`, which this project now uses for CSS, JavaScript, and the favicon.
-- Vercel respects Python version hints from `.python-version`, `pyproject.toml`, or `Pipfile.lock`.
+- `app.py` exports the Flask `app` object, which Vercel uses as the entrypoint.
+- Static assets live in `public/**`, which Vercel serves efficiently.
+- Templates remain in `templates/**` and continue to render through Flask.
+- Python dependencies are installed from `requirements.txt`.
 
 Recommended steps:
 
 1. Push this repository to GitHub.
 2. Create a free Vercel account and import the repo.
-3. Keep the framework as auto-detected Flask or Python.
+3. Keep the framework as auto-detected Python or Flask if Vercel suggests it.
 4. Leave the root as the repository root.
-5. Deploy.
+5. Add any required environment variables in the Vercel project settings before production use.
+6. Deploy.
+
+What Vercel should see at build time:
+
+- `app.py` at the repository root
+- `requirements.txt` at the repository root
+- static assets under `public/`
+- Flask templates under `templates/`
 
 For local parity with Vercel CLI:
 
@@ -104,11 +113,12 @@ vercel dev
 
 ## CI validation
 
-GitHub Actions now runs a lightweight validation workflow on pushes and pull requests:
+GitHub Actions now includes:
 
-- installs dependencies from `requirements.txt`
-- compiles the Python source tree
-- imports the Flask app as a smoke test
+- `validate.yml` on pushes and pull requests:
+  installs dependencies from `requirements.txt`, compiles the Python source tree, and imports the Flask app as a smoke test.
+- `pr-release-comment.yml` on PR merge into `main`:
+  posts a release-oriented comment back on the merged pull request so the merge event is explicitly marked for release/deployment follow-up.
 
 ## Extending the tool
 

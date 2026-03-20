@@ -134,6 +134,13 @@ CMS_RULES = [
         ],
     },
     {
+        "name": "TerminalFour",
+        "family": "Proprietary Enterprise CMS",
+        "signals": [
+            {"label": "footer", "patterns": ["powered by terminalfour", "terminalfour", "terminal four"], "weight": 4, "source": "html"},
+        ],
+    },
+    {
         "name": "Sanity",
         "family": "Headless CMS",
         "signals": [

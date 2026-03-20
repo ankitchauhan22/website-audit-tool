@@ -78,6 +78,12 @@ STACK_PATTERNS = [
     },
     {
         "category": "CMS",
+        "name": "TerminalFour",
+        "patterns": [r"powered by terminalfour", r"terminalfour", r"terminal four"],
+        "confidence": "Medium",
+    },
+    {
+        "category": "CMS",
         "name": "Granicus govAccess",
         "patterns": [r"govaccess", r"visioninternet"],
         "confidence": "Medium",
