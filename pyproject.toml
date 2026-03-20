@@ -1,5 +1,5 @@
 [project]
-name = "signalscan-audit"
+name = "website-audit-tool"
 version = "0.1.0"
 description = "Passive website audit tool for CMS, technology, and security signal analysis."
-requires-python = "==3.11.*"
+requires-python = ">=3.11"
