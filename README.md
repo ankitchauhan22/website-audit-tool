@@ -120,6 +120,10 @@ GitHub Actions now includes:
 - `pr-release-comment.yml` on PR merge into `main`:
   posts a release-oriented comment back on the merged pull request so the merge event is explicitly marked for release/deployment follow-up.
 
+## Changelog
+
+- See [CHANGELOG.md](/var/www/website-audit-tool/CHANGELOG.md) for a running record of notable project changes.
+
 ## Extending the tool
 
 - Add new CMS fingerprints in [detectors/cms_detector.py](/var/www/website-audit-tool/detectors/cms_detector.py)

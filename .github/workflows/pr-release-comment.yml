@@ -19,10 +19,17 @@ jobs:
         with:
           script: |
             const pr = context.payload.pull_request;
+            const changedTitle = pr.title || "Merged change";
             const body = [
-              "Release note:",
-              `This PR was merged into \`main\` and is ready for the next release/deployment flow.`,
+              "Release readiness update",
+              `This website audit tool change has been merged into \`main\` and is ready for the next deployment review.`,
+              `Merged PR: **${changedTitle}**`,
               `Merge commit: \`${pr.merge_commit_sha || "not available"}\``,
+              "Recommended post-merge checks:",
+              "- Confirm the Vercel deployment completes successfully.",
+              "- Run a live scan against at least one known WordPress site and one non-WordPress site.",
+              "- Verify PDF export still renders correctly after deployment.",
+              "- Spot-check CMS detection, version guidance, recommendations, and score breakdown output.",
             ].join("\n\n");
 
             await github.rest.issues.createComment({
