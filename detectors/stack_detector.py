@@ -66,6 +66,12 @@ STACK_PATTERNS = [
     },
     {
         "category": "CMS",
+        "name": "ButterCMS",
+        "patterns": [r"api\.buttercms\.com", r"buttercms"],
+        "confidence": "Medium",
+    },
+    {
+        "category": "CMS",
         "name": "CivicLive",
         "patterns": [r"powered by civiclive", r"civiclive\.com", r"civiclive"],
         "confidence": "Medium",
@@ -81,6 +87,12 @@ STACK_PATTERNS = [
         "name": "TerminalFour",
         "patterns": [r"powered by terminalfour", r"terminalfour", r"terminal four"],
         "confidence": "Medium",
+    },
+    {
+        "category": "CMS",
+        "name": "Craft CMS",
+        "patterns": [r"craft cms", r"/cpresources/", r"craftcms"],
+        "confidence": "High",
     },
     {
         "category": "CMS",
@@ -200,6 +212,18 @@ STACK_PATTERNS = [
         "category": "Runtime",
         "name": "Laravel",
         "patterns": [r"laravel_session", r"x-powered-by:\s*php", r"csrf-token"],
+        "confidence": "Medium",
+    },
+    {
+        "category": "Runtime",
+        "name": "CakePHP",
+        "patterns": [r"cakephp", r"cakephp:?", r"/js/cakephp", r"csrfToken"],
+        "confidence": "Medium",
+    },
+    {
+        "category": "Runtime",
+        "name": "Zend Framework",
+        "patterns": [r"zend framework", r"zendframework", r"zend-http", r"zend-session", r"zend_form"],
         "confidence": "Medium",
     },
     {

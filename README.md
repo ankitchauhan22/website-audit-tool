@@ -49,7 +49,7 @@ python3 app.py
 ## Detection strategy
 
 - The audit is passive only. It relies on public HTML, headers, asset paths, cookie names, and generator metadata.
-- CMS detection includes traditional platforms, proprietary builders, headless CMS products, and government-focused platforms such as SharePoint, Sitefinity, CivicPlus, CivicLive, ProdCity, TerminalFour, and Granicus products when strong public signals are present.
+- CMS detection includes traditional platforms, proprietary builders, headless CMS products, and government-focused platforms such as SharePoint, Sitefinity, CivicPlus, CivicLive, ProdCity, TerminalFour, ButterCMS, Craft CMS, and Granicus products when strong public signals are present.
 - The built-in profiler now groups detections into stable presentation sections instead of a long mixed list.
 - Technology signatures live in [detectors/stack_detector.py](/var/www/website-audit-tool/detectors/stack_detector.py) and can be extended safely over time.
 - The CMS classifier lives in [detectors/cms_detector.py](/var/www/website-audit-tool/detectors/cms_detector.py) and produces a ranked primary/secondary CMS summary.
