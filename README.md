@@ -75,9 +75,10 @@ python3 app.py
 This project is structured to fit Vercel's Flask and Python deployment model:
 
 - `app.py` exports the Flask `app` object, which Vercel uses as the entrypoint.
-- Static assets live in `public/**`, which Vercel serves efficiently.
+- Static assets live in `public/**` and are exposed by Flask at `/static/*`.
 - Templates remain in `templates/**` and continue to render through Flask.
 - Python dependencies are installed from `requirements.txt`.
+- `vercel.json` explicitly includes the Flask app package, detectors, services, PDF code, templates, and public assets in the serverless bundle, and lets filesystem assets resolve before the Flask catch-all route.
 
 Recommended steps:
 
@@ -119,6 +120,14 @@ GitHub Actions now includes:
   installs dependencies from `requirements.txt`, compiles the Python source tree, and imports the Flask app as a smoke test.
 - `pr-release-comment.yml` on PR merge into `main`:
   posts a release-oriented comment back on the merged pull request so the merge event is explicitly marked for release/deployment follow-up.
+- `deploy-vercel.yml` on push to `main`:
+  pulls Vercel production settings, builds the project with the Vercel CLI, and deploys the prebuilt production output.
+
+Required GitHub repository secrets for Vercel deployment:
+
+- `VERCEL_TOKEN`
+- `VERCEL_ORG_ID`
+- `VERCEL_PROJECT_ID`
 
 ## Changelog
 
