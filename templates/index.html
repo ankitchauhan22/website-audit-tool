@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SignalScan Audit</title>
+    <meta name="description"
+        content="Run a passive website audit for CMS detection, security headers, transport posture, and technology fingerprints.">
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.8/css/bootstrap.min.css"
+        integrity="sha512-2bBQCjcnw658Lho4nlXJcc6WkV/UxpE/sAokbXPxQNGqmNdQrWqtw26Ns9kFF/yG792pKR1Sx8/Y1Lf1XN4GKA=="
+        crossorigin="anonymous" referrerpolicy="no-referrer" />
+    <link rel="stylesheet" href="/style.css">
+</head>
+
+<body>
+    <main class="shell">
+        <section class="hero">
+            <p class="eyebrow">Website Audit Tool</p>
+            <h1>Inspect CMS, Frameworks, and broader technology fingerprints in one pass.</h1>
+            <p class="lede">
+                The audit uses a built-in passive profiler to organize public evidence from HTML, assets, headers, and
+                cookies into a cleaner technology profile with security context.
+            </p>
+
+            <form method="POST" class="audit-form" data-audit-form>
+                <label for="url">Website URL</label>
+                <div class="form-row">
+                    <input id="url" type="text" name="url" placeholder="https://example.com" required>
+                    <button type="submit" data-submit-button>Audit Website</button>
+                </div>
+            </form>
+
+            <div class="alert" data-status hidden></div>
+        </section>
+
+        <section class="toolbar">
+            <button type="button" class="secondary-button" data-export-pdf hidden>Export PDF</button>
+        </section>
+
+        <section data-results></section>
+    </main>
+    <script src="/script.js"></script>
+</body>
+
+</html>
