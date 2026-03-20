@@ -6,7 +6,7 @@ from flask import Flask
 SECURITY_HEADERS = {
     "Content-Security-Policy": (
         "default-src 'self'; "
-        "script-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https:; "
         "style-src 'self' https://cdnjs.cloudflare.com 'unsafe-inline'; "
         "img-src 'self' data: https:; "
         "font-src 'self' data: https://cdnjs.cloudflare.com; "
