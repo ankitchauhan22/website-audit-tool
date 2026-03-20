@@ -1,15 +1,27 @@
 {
-    "version": 2,
-    "builds": [
-        {
-            "src": "app.py",
-            "use": "@vercel/python"
-        }
-    ],
-    "rewrites": [
-        {
-            "source": "/(.*)",
-            "destination": "app.py"
-        }
-    ]
+  "version": 2,
+  "builds": [
+    {
+      "src": "app.py",
+      "use": "@vercel/python",
+      "config": {
+        "runtime": "python3.11",
+        "includeFiles": [
+          "audit_tool/**",
+          "detectors/**",
+          "services/**",
+          "pdf/**",
+          "templates/**",
+          "public/**",
+          "scanner.py"
+        ]
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "app.py"
+    }
+  ]
 }

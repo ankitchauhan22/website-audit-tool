@@ -78,6 +78,7 @@ This project is structured to fit Vercel's Flask and Python deployment model:
 - Static assets live in `public/**`, which Vercel serves efficiently.
 - Templates remain in `templates/**` and continue to render through Flask.
 - Python dependencies are installed from `requirements.txt`.
+- `vercel.json` explicitly includes the Flask app package, detectors, services, PDF code, templates, and public assets in the serverless bundle.
 
 Recommended steps:
 
