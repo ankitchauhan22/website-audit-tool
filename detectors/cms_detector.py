@@ -104,6 +104,13 @@ CMS_RULES = [
         ],
     },
     {
+        "name": "ButterCMS",
+        "family": "Headless CMS",
+        "signals": [
+            {"label": "api", "patterns": ["api.buttercms.com", "buttercms"], "weight": 4, "source": "html"},
+        ],
+    },
+    {
         "name": "CivicPlus HCMS",
         "family": "Headless CMS",
         "signals": [
@@ -191,6 +198,14 @@ CMS_RULES = [
         "signals": [
             {"label": "asset", "patterns": ["/sitecore/", "sitecore/shell"], "weight": 4, "source": "html"},
             {"label": "header", "patterns": ["x-aspnetmvc-version", "sc_mode"], "weight": 2, "source": "headers"},
+        ],
+    },
+    {
+        "name": "Craft CMS",
+        "family": "Traditional CMS",
+        "signals": [
+            {"label": "generator", "patterns": ["craft cms"], "weight": 9, "source": "generator"},
+            {"label": "asset", "patterns": ["/cpresources/", "craftcms"], "weight": 4, "source": "html"},
         ],
     },
     {
