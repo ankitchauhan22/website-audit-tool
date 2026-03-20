@@ -1,0 +1,33 @@
+name: PR Release Comment
+
+on:
+  pull_request_target:
+    types:
+      - closed
+
+permissions:
+  pull-requests: write
+
+jobs:
+  comment-on-main-merge:
+    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Add release note comment to merged PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const body = [
+              "Release note:",
+              `This PR was merged into \`main\` and is ready for the next release/deployment flow.`,
+              `Merge commit: \`${pr.merge_commit_sha || "not available"}\``,
+            ].join("\n\n");
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              body,
+            });
