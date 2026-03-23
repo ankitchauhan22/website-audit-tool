@@ -5,10 +5,11 @@ import subprocess
 import tempfile
 from email.parser import Parser
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import certifi
 import requests
+from bs4 import BeautifulSoup
 
 
 DEFAULT_HEADERS = {
@@ -246,6 +247,143 @@ def _insecure_ssl_error_message(url: str) -> str:
         f"TLS certificate validation failed for {url}. "
         "The target could not be fetched even after secure and insecure retries."
     )
+
+
+def probe_post_forms(base_url: str, pages: list[dict], max_forms: int = 2, timeout: int = 12) -> list[dict]:
+    """Submit a very small number of low-risk same-origin POST forms for exposure review."""
+    parsed_base = urlparse(base_url)
+    domain_key = (parsed_base.hostname or "").lower().removeprefix("www.")
+    findings = []
+    attempted = 0
+    session = requests.Session()
+    skip_keywords = {
+        "login", "signin", "sign-in", "password", "checkout", "payment", "delete",
+        "remove", "logout", "admin", "register", "account", "cart", "upload", "comment",
+    }
+    field_types = {"text", "email", "search", "hidden", "tel"}
+
+    for page in pages:
+        if attempted >= max_forms:
+            break
+
+        soup = BeautifulSoup(page.get("html", "") or "", "html.parser")
+        for form in soup.find_all("form"):
+            if attempted >= max_forms:
+                break
+
+            method = (form.get("method") or "get").strip().lower()
+            if method != "post":
+                continue
+
+            action = urljoin(page.get("final_url") or base_url, form.get("action") or page.get("final_url") or base_url)
+            parsed_action = urlparse(action)
+            action_host = (parsed_action.hostname or "").lower().removeprefix("www.")
+            lowered_action = action.lower()
+            if action_host and action_host != domain_key:
+                continue
+            if any(keyword in lowered_action for keyword in skip_keywords):
+                continue
+
+            inputs = form.find_all(["input", "select", "textarea"])
+            payload = {}
+            skip_form = False
+            meaningful_fields = 0
+
+            for field in inputs:
+                name = (field.get("name") or "").strip()
+                field_type = (field.get("type") or "text").strip().lower()
+                if not name:
+                    continue
+                lowered_name = name.lower()
+                if any(keyword in lowered_name for keyword in skip_keywords):
+                    skip_form = True
+                    break
+                if field_type in {"password", "file", "submit", "reset", "button", "image"}:
+                    skip_form = True
+                    break
+
+                if field.name == "textarea":
+                    payload[name] = "audit probe message"
+                    meaningful_fields += 1
+                elif field.name == "select":
+                    options = field.find_all("option")
+                    if options:
+                        payload[name] = options[0].get("value") or options[0].get_text(strip=True)
+                        meaningful_fields += 1
+                elif field_type in field_types:
+                    payload[name] = (
+                        "audit-probe@example.com" if field_type == "email" or "email" in lowered_name else "audit-probe"
+                    )
+                    meaningful_fields += 1
+                elif field_type in {"checkbox", "radio"}:
+                    if field.has_attr("checked") or field.get("value"):
+                        payload[name] = field.get("value") or "1"
+                else:
+                    value = field.get("value")
+                    if value is not None:
+                        payload[name] = value
+
+            if skip_form or meaningful_fields == 0 or meaningful_fields > 6:
+                continue
+
+            attempted += 1
+            try:
+                response = session.post(
+                    action,
+                    data=payload,
+                    timeout=timeout,
+                    headers={**DEFAULT_HEADERS, "Referer": page.get("final_url") or base_url},
+                    allow_redirects=True,
+                    verify=TLS_CA_BUNDLE,
+                )
+                response_text = response.text or ""
+                reflected = "audit-probe" in response_text.lower()
+                server_error = response.status_code >= 500
+                findings.append(
+                    {
+                        "page_url": page.get("final_url") or page.get("url") or base_url,
+                        "action": action,
+                        "status_code": response.status_code,
+                        "reflected_input": reflected,
+                        "server_error": server_error,
+                        "detail": (
+                            "Probe input was reflected in the response body."
+                            if reflected
+                            else "Form accepted a low-risk POST probe without obvious input reflection."
+                        ),
+                    }
+                )
+            except requests.RequestException as exc:
+                findings.append(
+                    {
+                        "page_url": page.get("final_url") or page.get("url") or base_url,
+                        "action": action,
+                        "status_code": "Request failed",
+                        "reflected_input": False,
+                        "server_error": False,
+                        "detail": str(exc),
+                    }
+                )
+
+    return findings
+
+
+def fetch_text_asset(asset_url: str, timeout: int = 10, max_bytes: int = 300000) -> str:
+    """Fetch a text-like asset body for version fingerprinting."""
+    normalized_url = normalize_url(asset_url)
+    response = requests.get(
+        normalized_url,
+        timeout=timeout,
+        headers=DEFAULT_HEADERS,
+        allow_redirects=True,
+        verify=TLS_CA_BUNDLE,
+    )
+    response.raise_for_status()
+    content_type = (response.headers.get("Content-Type") or "").lower()
+    if not any(token in content_type for token in ("javascript", "css", "text", "json")) and content_type:
+        return ""
+    body = response.text or ""
+    return body[:max_bytes]
 
 
 def fetch_page(

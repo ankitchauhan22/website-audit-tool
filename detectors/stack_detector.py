@@ -335,6 +335,42 @@ STACK_PATTERNS = [
         "confidence": "Medium",
     },
     {
+        "category": "JavaScript Library",
+        "name": "jQuery UI",
+        "patterns": [r"jquery-ui(?:\.min)?\.(?:js|css)", r"ui-datepicker", r"ui-widget"],
+        "confidence": "High",
+    },
+    {
+        "category": "JavaScript Library",
+        "name": "Swiper",
+        "patterns": [r"swiper(?:-bundle)?(?:\.min)?\.(?:js|css)", r"\bswiper-wrapper\b", r"\bswiper-slide\b"],
+        "confidence": "High",
+    },
+    {
+        "category": "Performance",
+        "name": "LazySizes",
+        "patterns": [r"lazysizes(?:\.min)?\.js", r"lazyload", r"data-src"],
+        "confidence": "Medium",
+    },
+    {
+        "category": "JavaScript Library",
+        "name": "core-js",
+        "patterns": [r"core-js(?:[-.]\d+(?:\.\d+)*)?", r"core-js/modules/"],
+        "confidence": "Medium",
+    },
+    {
+        "category": "JavaScript Library",
+        "name": "AOS",
+        "patterns": [r"(?:^|/)aos(?:\.min)?\.(?:js|css)", r"data-aos="],
+        "confidence": "Medium",
+    },
+    {
+        "category": "Consent",
+        "name": "CookieYes",
+        "patterns": [r"cookieyes", r"cookie-law-info", r"cky-consent"],
+        "confidence": "High",
+    },
+    {
         "category": "Consent",
         "name": "OneTrust",
         "patterns": [r"onetrust", r"optanon"],

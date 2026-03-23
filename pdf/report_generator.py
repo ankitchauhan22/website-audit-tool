@@ -216,10 +216,12 @@ def _score_rows(data, styles):
         _paragraph("Impact", styles, "SmallCell"),
     ]]
     for item in data.get("score_breakdown", []):
+        if not item.get("impact"):
+            continue
         rows.append(
             [
                 _paragraph(item.get("label", "Unspecified factor"), styles, "SmallCell"),
-                _paragraph((item.get("severity", "monitor") or "monitor").upper(), styles, "SmallCell"),
+                _paragraph(item.get("priority", "P3"), styles, "SmallCell"),
                 _paragraph(item.get("detail", "No explanation available."), styles, "SmallCell"),
                 _paragraph(item.get("action", "Review this factor manually."), styles, "SmallCell"),
                 _paragraph(str(item.get("impact", 0)), styles, "SmallCell"),
@@ -279,14 +281,16 @@ def generate_pdf(data, output_path="audit_report.pdf"):
 
     story.extend(
         _section_intro(
-            "Executive Summary",
-            "This section captures the URLs assessed, the platform conclusion, and the customer-facing health posture from passive evidence.",
+            "Website Details",
+            "This section captures the resolved site, platform conclusion, and the coverage used to produce the audit.",
             styles,
         )
     )
     summary_rows = [
         [_paragraph("Requested URL", styles, "SmallCell"), _paragraph(data.get("url", "Not available"), styles, "SmallCell")],
         [_paragraph("Final URL", styles, "SmallCell"), _paragraph(data.get("final_url", data.get("url", "Not available")), styles, "SmallCell")],
+        [_paragraph("Deep Scan", styles, "SmallCell"), _paragraph("Enabled" if (data.get("crawl_summary") or {}).get("deep_scan_enabled") else "Off", styles, "SmallCell")],
+        [_paragraph("Pages Scanned", styles, "SmallCell"), _paragraph(str((data.get("crawl_summary") or {}).get("pages_scanned", 1)), styles, "SmallCell")],
         [_paragraph("Platform Assessment", styles, "SmallCell"), _paragraph(data.get("cms_summary", data.get("cms", "Not available")), styles, "SmallCell")],
         [_paragraph("Detected Version", styles, "SmallCell"), _paragraph(data.get("version", "Not publicly exposed"), styles, "SmallCell")],
         [_paragraph("Recommended Track", styles, "SmallCell"), _paragraph(data.get("recommended_cms_version", "No CMS release track inferred"), styles, "SmallCell")],
@@ -307,12 +311,67 @@ def generate_pdf(data, output_path="audit_report.pdf"):
     if data.get("score_breakdown"):
         story.extend(
             _section_intro(
-                "Health Score Breakdown",
-                "Each factor below explains what influenced the score, why it matters, and the next remediation step.",
+                "Security Audit",
+                "This section focuses on the scored security and transport issues that most affect the current health posture.",
                 styles,
             )
         )
         story.extend([_build_table(_score_rows(data, styles), [42 * mm, 20 * mm, 58 * mm, 48 * mm, 15 * mm]), Spacer(1, 12)])
+
+    performance = data.get("performance_audit") or {}
+    if performance.get("mobile") or performance.get("desktop") or performance.get("error"):
+        story.extend(
+            _section_intro(
+                "Performance Audit",
+                "PageSpeed results are shown for mobile and desktop when the public PSI API could complete the analysis.",
+                styles,
+            )
+        )
+        if performance.get("error"):
+            story.extend([_build_table([[_paragraph(performance["error"], styles, "SmallCell")]], [180 * mm], has_header=False), Spacer(1, 12)])
+        else:
+            perf_rows = [[
+                _paragraph("Profile", styles, "SmallCell"),
+                _paragraph("Score", styles, "SmallCell"),
+                _paragraph("LCP", styles, "SmallCell"),
+                _paragraph("Interactive", styles, "SmallCell"),
+                _paragraph("Top Opportunities", styles, "SmallCell"),
+            ]]
+            for strategy in ("mobile", "desktop"):
+                audit = performance.get(strategy) or {}
+                perf_rows.append(
+                    [
+                        _paragraph(strategy.title(), styles, "SmallCell"),
+                        _paragraph(audit.get("score", "N/A"), styles, "SmallCell"),
+                        _paragraph(audit.get("largest_contentful_paint", "Not available"), styles, "SmallCell"),
+                        _paragraph(audit.get("interactive", "Not available"), styles, "SmallCell"),
+                        _paragraph(", ".join(audit.get("recommendations", [])) or "No major opportunity captured", styles, "SmallCell"),
+                    ]
+                )
+            story.extend([_build_table(perf_rows, [24 * mm, 20 * mm, 28 * mm, 28 * mm, 80 * mm]), Spacer(1, 12)])
+
+    seo = data.get("seo_audit") or {}
+    if seo:
+        story.extend(
+            _section_intro(
+                "SEO Performance",
+                "Homepage SEO hygiene and repeated issues from the scanned page set are summarized below.",
+                styles,
+            )
+        )
+        seo_rows = [
+            [_paragraph("Signal", styles, "SmallCell"), _paragraph("Observed", styles, "SmallCell")],
+            [_paragraph("Title", styles, "SmallCell"), _paragraph(seo.get("title", "Not exposed"), styles, "SmallCell")],
+            [_paragraph("Meta Description", styles, "SmallCell"), _paragraph(seo.get("meta_description", "Not exposed"), styles, "SmallCell")],
+            [_paragraph("Canonical", styles, "SmallCell"), _paragraph(seo.get("canonical", "Not exposed"), styles, "SmallCell")],
+            [_paragraph("Robots", styles, "SmallCell"), _paragraph(seo.get("robots", "Not exposed"), styles, "SmallCell")],
+            [_paragraph("H1 Count", styles, "SmallCell"), _paragraph(str(seo.get("h1_count", 0)), styles, "SmallCell")],
+            [_paragraph("Images Missing Alt", styles, "SmallCell"), _paragraph(str(seo.get("images_missing_alt", 0)), styles, "SmallCell")],
+        ]
+        story.extend([_build_table(seo_rows, [48 * mm, 132 * mm], has_header=True), Spacer(1, 8)])
+        if seo.get("issues"):
+            issue_rows = [[_paragraph("Key SEO Issues", styles, "SmallCell")]] + [[_paragraph(issue, styles, "SmallCell")] for issue in seo["issues"][:6]]
+            story.extend([_build_table(issue_rows, [180 * mm], has_header=False), Spacer(1, 12)])
 
     if data.get("cms_matches"):
         story.extend(

@@ -10,7 +10,7 @@ SECURITY_HEADERS = {
         "style-src 'self' https://cdnjs.cloudflare.com 'unsafe-inline'; "
         "img-src 'self' data: https:; "
         "font-src 'self' data: https://cdnjs.cloudflare.com; "
-        "connect-src 'self'; "
+        "connect-src 'self' https://cdnjs.cloudflare.com; "
         "base-uri 'self'; "
         "form-action 'self'; "
         "frame-ancestors 'none'; "

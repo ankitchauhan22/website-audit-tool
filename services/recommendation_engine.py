@@ -25,6 +25,13 @@ def _dedupe_recommendations(items: list[dict]) -> list[dict]:
     return deduped
 
 
+def _meaningful_recommendations(items: list[dict]) -> list[dict]:
+    severity_rank = {"must": 0, "high": 1, "monitor": 2}
+    filtered = [item for item in items if item.get("severity") in {"must", "high"}]
+    filtered.sort(key=lambda item: (severity_rank.get(item.get("severity", "monitor"), 3), item.get("title", "")))
+    return filtered[:10]
+
+
 def generate_recommendations(scan):
     """Generate prioritized remediation guidance from passive audit evidence."""
     recommendations = []
@@ -91,6 +98,101 @@ def generate_recommendations(scan):
                 "Fix TLS certificate chain",
                 "Repair the site's certificate chain or intermediate certificates so audits and browsers can validate TLS without fallback behavior.",
                 scan["fetch_warning"],
+            )
+        )
+
+    tls_validation = next((item for item in scan.get("transport", []) if item["check"] == "TLS Validation"), None)
+    if tls_validation and tls_validation.get("value") in {"Certificate validation failed", "Expired", "Expiring soon"}:
+        recommendations.append(
+            _recommendation_item(
+                "must" if tls_validation["value"] == "Certificate validation failed" else "high",
+                "Repair TLS certificate trust",
+                "Renew or reissue the certificate, install the full intermediate chain, and verify the certificate covers the production hostname and redirect target.",
+                tls_validation.get("detail", "TLS validation needs review."),
+            )
+        )
+
+    host_consistency = next((item for item in scan.get("domain_identity", []) if item["check"] == "Host Consistency"), None)
+    if host_consistency and host_consistency.get("value") != "Aligned":
+        recommendations.append(
+            _recommendation_item(
+                "high",
+                "Review domain redirect and identity alignment",
+                "Confirm the redirect target is intentional, branded correctly, monitored, and covered by the same certificate and DNS ownership controls as the requested domain.",
+                host_consistency.get("detail", "Requested and resolved hosts were not fully aligned."),
+            )
+        )
+
+    for cookie_issue in scan.get("cookie_issues", []):
+        if not cookie_issue.get("is_insecure"):
+            continue
+        severity = cookie_issue.get("severity", "high")
+        recommendations.append(
+            _recommendation_item(
+                severity,
+                f"Harden cookie {cookie_issue['name']}",
+                (
+                    f"Set Secure, HttpOnly, and SameSite on '{cookie_issue['name']}'"
+                    if cookie_issue.get("is_session_like")
+                    else f"Review the cookie policy for '{cookie_issue['name']}' and add missing security attributes where compatible."
+                ),
+                f"{cookie_issue['issue']}. {cookie_issue.get('detail', '')}".strip(),
+            )
+        )
+
+    for finding in scan.get("exposure_findings", []):
+        recommendations.append(
+            _recommendation_item(
+                "high" if finding.get("severity") == "high" else "monitor",
+                f"Reduce public leakage: {finding['name']}",
+                "Remove unnecessary debug markers, comments, source maps, or internal environment references from production responses and rebuilt assets.",
+                f"{finding.get('detail', '')} Evidence: {finding.get('evidence', 'Not captured')}. Source: {finding.get('source_url', 'Unknown page')}",
+            )
+        )
+
+    reflected_probes = [item for item in scan.get("form_probes", []) if item.get("reflected_input")]
+    errored_probes = [item for item in scan.get("form_probes", []) if item.get("server_error") or item.get("status_code") == "Request failed"]
+    for item in reflected_probes:
+        recommendations.append(
+            _recommendation_item(
+                "high",
+                "Review reflected public form input",
+                "Apply strict output encoding and input validation on the affected form workflow, then retest the response for reflection and error handling.",
+                f"Probe action: {item.get('action')}. {item.get('detail')}",
+            )
+        )
+    for item in errored_probes:
+        recommendations.append(
+            _recommendation_item(
+                "high",
+                "Stabilize public form handling",
+                "Review validation, CSRF handling, and exception control on the affected POST handler so benign invalid input does not trigger unstable responses.",
+                f"Probe action: {item.get('action')}. Result: {item.get('detail')}",
+            )
+        )
+
+    performance = scan.get("performance_audit") or {}
+    for strategy in ("mobile", "desktop"):
+        audit = performance.get(strategy) or {}
+        score = audit.get("score")
+        if score is not None and score < 60:
+            recommendations.append(
+                _recommendation_item(
+                    "high",
+                    f"Improve {strategy} page speed",
+                    f"Prioritize the main Lighthouse opportunities for the {strategy} experience and retest after deployment.",
+                    ", ".join(audit.get("recommendations", [])[:3]) or f"{strategy.title()} score: {score}",
+                )
+            )
+
+    seo_issues = (scan.get("seo_audit") or {}).get("issues", [])
+    for issue in seo_issues[:3]:
+        recommendations.append(
+            _recommendation_item(
+                "high",
+                "Fix SEO hygiene on key pages",
+                "Correct the homepage metadata and template issues, then verify the same patterns across the public page set.",
+                issue,
             )
         )
 
@@ -170,8 +272,8 @@ def generate_recommendations(scan):
                 _recommendation_item(
                     "monitor",
                     f"Validate {stack_item['name']} maintenance status",
-                    f"Use the site's admin panel, deployment manifest, package lock, or hosting inventory to confirm the installed {stack_item['name']} version and compare it with the supported release track ({recommended}).",
-                    f"Public version could not be confirmed after checking generator metadata, known asset paths, public script and stylesheet URLs, response headers, and exposed version query strings.",
+                    f"Public evidence did not expose the {stack_item['name']} version, so compare the product against the supported release track ({recommended}) using the CMS admin inventory, deployment manifest, package lock, or hosting asset register.",
+                    f"Passive version checks already reviewed generator metadata, known asset paths, public script and stylesheet URLs, response headers, and exposed version query strings.",
                 )
             )
 
@@ -194,14 +296,16 @@ def generate_recommendations(scan):
                 )
             )
 
+    recommendations = _meaningful_recommendations(_dedupe_recommendations(recommendations))
+
     if not recommendations:
         recommendations.append(
             _recommendation_item(
-                "monitor",
-                "Complete an internal maintenance review",
-                "Compare the site's CMS, extensions, libraries, TLS settings, and security headers against your internal asset inventory and patch schedule.",
-                "Passive checks did not surface urgent externally visible issues.",
+                "high",
+                "Review the site manually",
+                "The scan did not find a clear high-confidence remediation item, so review key templates, critical forms, and the production asset inventory manually.",
+                "Passive evidence did not surface a single dominant issue.",
             )
         )
 
-    return _dedupe_recommendations(recommendations)
+    return recommendations

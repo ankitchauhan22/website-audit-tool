@@ -21,10 +21,11 @@ def scan():
     """Run the passive audit for the submitted URL."""
     payload = request.get_json(silent=True) or {}
     url = (payload.get("url") or "").strip()
+    deep_scan = bool(payload.get("deep_scan"))
     if not url:
         return jsonify({"error": "Enter a website URL to run the audit."}), 400
 
-    result = run_scan(url)
+    result = run_scan(url, deep_scan=deep_scan)
     status_code = 200 if not result.get("error") else 502
     return jsonify(result), status_code
 
