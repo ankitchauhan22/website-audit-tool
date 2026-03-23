@@ -4,6 +4,7 @@ import re
 PLUGIN_PATTERNS = [
     re.compile(r"wp-content/plugins/([^/?\"'#]+)/", re.IGNORECASE),
     re.compile(r"wp-content/mu-plugins/([^/?\"'#]+)/", re.IGNORECASE),
+    re.compile(r"['\" ](contact-form-7|elementor|woocommerce|wordfence|yoast|yoast-seo|siteorigin-panels|revslider|js_composer|wpforms|gravityforms|cookie-law-info|cookieyes|wpml|autoptimize|wp-fastest-cache|wpfastestcache)[/'\" ]", re.IGNORECASE),
 ]
 
 PLUGIN_VERSION_PATTERN = re.compile(

@@ -31,13 +31,13 @@
                     <input id="url" type="text" name="url" placeholder="https://example.com" required>
                     <button type="submit" data-submit-button>Audit Website</button>
                 </div>
+                <label class="check-row" for="deep-scan">
+                    <input id="deep-scan" type="checkbox" name="deep_scan">
+                    <span>Deep scan 5-10 non-identical pages on the same domain</span>
+                </label>
             </form>
 
             <div class="alert" data-status hidden></div>
-        </section>
-
-        <section class="toolbar">
-            <button type="button" class="secondary-button" data-export-pdf hidden>Export PDF</button>
         </section>
 
         <section data-results></section>

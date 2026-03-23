@@ -1,3 +1,6 @@
+import socket
+import ssl
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 
@@ -35,11 +38,84 @@ TECHNOLOGY_SECTIONS = [
 ]
 
 
-def build_transport_profile(final_url: str, headers):
+def _strip_www(hostname: str) -> str:
+    return (hostname or "").lower().removeprefix("www.")
+
+
+def fetch_tls_profile(final_url: str, timeout: float = 4.0) -> dict:
+    """Collect certificate identity and validity details for HTTPS targets."""
+    parsed = urlparse(final_url)
+    hostname = parsed.hostname or ""
+    port = parsed.port or 443
+
+    if parsed.scheme != "https" or not hostname:
+        return {
+            "scheme": parsed.scheme or "unknown",
+            "hostname": hostname or "unknown",
+            "status": "Not applicable",
+            "detail": "TLS inspection only applies when the final URL resolves over HTTPS.",
+        }
+
+    context = ssl.create_default_context()
+    try:
+        with socket.create_connection((hostname, port), timeout=timeout) as sock:
+            with context.wrap_socket(sock, server_hostname=hostname) as tls_socket:
+                certificate = tls_socket.getpeercert()
+    except ssl.SSLCertVerificationError as exc:
+        return {
+            "scheme": "https",
+            "hostname": hostname,
+            "status": "Certificate validation failed",
+            "detail": str(exc),
+        }
+    except OSError as exc:
+        return {
+            "scheme": "https",
+            "hostname": hostname,
+            "status": "TLS inspection unavailable",
+            "detail": str(exc),
+        }
+
+    issuer = dict(item[0] for item in certificate.get("issuer", []) if item)
+    subject = dict(item[0] for item in certificate.get("subject", []) if item)
+    sans = [entry[1] for entry in certificate.get("subjectAltName", []) if len(entry) > 1]
+    not_after_raw = certificate.get("notAfter")
+    expires_in_days = None
+    validity_status = "Valid"
+
+    if not_after_raw:
+        expires_at = datetime.strptime(not_after_raw, "%b %d %H:%M:%S %Y %Z").replace(tzinfo=timezone.utc)
+        expires_in_days = (expires_at - datetime.now(timezone.utc)).days
+        if expires_in_days < 0:
+            validity_status = "Expired"
+        elif expires_in_days < 30:
+            validity_status = "Expiring soon"
+
+    covered_names = {hostname.lower(), *[name.lower() for name in sans]}
+    hostname_covered = any(
+        name == hostname.lower()
+        or (name.startswith("*.") and hostname.lower().endswith(name[1:]))
+        for name in covered_names
+    )
+
+    return {
+        "scheme": "https",
+        "hostname": hostname,
+        "status": validity_status,
+        "detail": f"Issued by {issuer.get('organizationName') or issuer.get('commonName') or 'Unknown issuer'}.",
+        "subject": subject.get("commonName", "Not exposed"),
+        "issuer": issuer.get("organizationName") or issuer.get("commonName") or "Not exposed",
+        "san_count": len(sans),
+        "expires_in_days": expires_in_days,
+        "hostname_covered": hostname_covered,
+    }
+
+
+def build_transport_profile(final_url: str, headers, fetch_warning: str | None = None, tls_profile: dict | None = None):
     """Summarize transport- and cache-related response signals."""
     parsed = urlparse(final_url)
     is_https = parsed.scheme == "https"
-    return [
+    profile = [
         {
             "check": "HTTPS",
             "value": "Enabled" if is_https else "Not enabled",
@@ -62,10 +138,96 @@ def build_transport_profile(final_url: str, headers):
         },
     ]
 
+    if tls_profile:
+        expiry_detail = tls_profile.get("detail", "TLS inspection completed.")
+        if tls_profile.get("expires_in_days") is not None:
+            expiry_detail = f"{expiry_detail} Certificate expires in {tls_profile['expires_in_days']} day(s)."
+        profile.extend(
+            [
+                {
+                    "check": "TLS Validation",
+                    "value": tls_profile.get("status", "Unknown"),
+                    "detail": expiry_detail,
+                },
+                {
+                    "check": "Certificate Host Coverage",
+                    "value": "Matches hostname" if tls_profile.get("hostname_covered") else "Review required",
+                    "detail": f"Certificate subject: {tls_profile.get('subject', 'Not exposed')}",
+                },
+            ]
+        )
+
+    if fetch_warning:
+        profile.append(
+            {
+                "check": "TLS Fetch Path",
+                "value": "Warning",
+                "detail": fetch_warning,
+            }
+        )
+
+    return profile
+
+
+def build_domain_identity_profile(requested_url: str, final_url: str, headers, tls_profile: dict | None = None) -> list[dict]:
+    """Summarize redirect, hostname, and certificate identity signals."""
+    requested = urlparse(requested_url if "://" in requested_url else f"https://{requested_url}")
+    final = urlparse(final_url)
+    requested_host = requested.hostname or ""
+    final_host = final.hostname or ""
+    same_domain = _strip_www(requested_host) == _strip_www(final_host)
+
+    profile = [
+        {
+            "check": "Resolved Hostname",
+            "value": final_host or "Not resolved",
+            "detail": "Final hostname reached by the passive scan.",
+        },
+        {
+            "check": "Host Consistency",
+            "value": "Aligned" if same_domain else "Review redirect target",
+            "detail": (
+                f"Requested host {requested_host or 'unknown'} resolved to {final_host or 'unknown'}."
+            ),
+        },
+        {
+            "check": "Canonical Redirect",
+            "value": "Present" if requested.geturl() != final.geturl() else "Not observed",
+            "detail": (
+                f"Requested URL redirected to {final.geturl()}."
+                if requested.geturl() != final.geturl()
+                else "No redirect was required for the requested page."
+            ),
+        },
+        {
+            "check": "Server Identity",
+            "value": headers.get("Server", "Not exposed"),
+            "detail": "Origin or edge server identity exposed in public headers.",
+        },
+    ]
+
+    if tls_profile:
+        profile.append(
+            {
+                "check": "Certificate Issuer",
+                "value": tls_profile.get("issuer", "Not exposed"),
+                "detail": tls_profile.get("detail", "TLS certificate details were collected from the final host."),
+            }
+        )
+
+    return profile
+
 
 def analyze_cookie_headers(set_cookie_headers):
     """Report missing security attributes on exposed Set-Cookie headers."""
     analysis = []
+
+    priority_map = {
+        "must": "P1",
+        "high": "P2",
+        "monitor": "P3",
+        "good": "P4",
+    }
 
     for raw_cookie in set_cookie_headers:
         parts = [part.strip() for part in raw_cookie.split(";") if part.strip()]
@@ -75,17 +237,34 @@ def analyze_cookie_headers(set_cookie_headers):
         cookie_name = parts[0].split("=", 1)[0]
         normalized = {part.lower() for part in parts[1:]}
         issues = []
+        severity = "good"
+        is_session_like = any(token in cookie_name.lower() for token in ("sess", "auth", "token", "login"))
+
         if "secure" not in normalized and not cookie_name.startswith("__Secure-"):
             issues.append("Missing Secure flag")
+            severity = "must" if is_session_like else "high"
         if "httponly" not in normalized:
             issues.append("Missing HttpOnly flag")
+            if severity != "must":
+                severity = "must" if is_session_like else "high"
         if not any(part.lower().startswith("samesite=") for part in parts[1:]):
             issues.append("Missing SameSite attribute")
+            if severity == "good":
+                severity = "monitor"
 
         analysis.append(
             {
                 "name": cookie_name,
                 "issue": ", ".join(issues) if issues else "No obvious attribute gap in exposed header",
+                "severity": severity,
+                "priority": priority_map.get(severity, "P3"),
+                "is_insecure": bool(issues),
+                "is_session_like": is_session_like,
+                "detail": (
+                    "Cookie name suggests session or authentication state."
+                    if is_session_like
+                    else "Public Set-Cookie header exposed on the scanned page set."
+                ),
             }
         )
 
