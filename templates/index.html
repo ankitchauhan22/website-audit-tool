@@ -11,19 +11,30 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.8/css/bootstrap.min.css"
         integrity="sha512-2bBQCjcnw658Lho4nlXJcc6WkV/UxpE/sAokbXPxQNGqmNdQrWqtw26Ns9kFF/yG792pKR1Sx8/Y1Lf1XN4GKA=="
         crossorigin="anonymous" referrerpolicy="no-referrer" />
-    <link rel="stylesheet" href="/static/style.css">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 
 <body>
     <main class="shell">
         <section class="hero">
-            <p class="eyebrow">Website Audit Tool</p>
+            <div class="brand-lockup">
+                <img src="/static/favicon.svg" alt="Website Audit Tool logo" class="brand-mark">
+                <div>
+                    <p class="eyebrow">Website Audit Tool</p>
+                    <p class="brand-subtitle">Client-ready website assessment platform</p>
+                </div>
+            </div>
             <h1>Inspect CMS, Frameworks, and broader technology fingerprints in one pass.</h1>
             <p class="lede">
                 The audit uses a built-in passive profiler to organize public evidence from HTML, assets, headers, and
                 cookies into a cleaner technology profile with security context.
             </p>
+            <div class="hero-icon-strip" aria-label="Audit focus areas">
+                <span class="hero-icon-pill"><span class="hero-icon hero-icon-cms" aria-hidden="true">CMS</span> CMS & Plugins</span>
+                <span class="hero-icon-pill"><span class="hero-icon hero-icon-code" aria-hidden="true">JS</span> Libraries & Frameworks</span>
+                <span class="hero-icon-pill"><span class="hero-icon hero-icon-shield" aria-hidden="true">SEC</span> Security Signals</span>
+                <span class="hero-icon-pill"><span class="hero-icon hero-icon-speed" aria-hidden="true">UX</span> Performance & SEO</span>
+            </div>
 
             <form method="POST" class="audit-form" data-audit-form>
                 <label for="url">Website URL</label>

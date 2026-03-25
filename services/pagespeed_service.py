@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import os
 import time
-from statistics import mean
 
 import requests
 
 
-PAGESPEED_API_URL = "https://www.googleapis.com/pagespeedonline/v5/runPagespeed"
-PAGESPEED_CACHE_TTL = 900
-_PAGESPEED_CACHE: dict[tuple[str, str], tuple[float, dict]] = {}
+GTMETRIX_BASE_URL = "https://gtmetrix.com/api/2.0"
+PINGDOM_DEFAULT_URL = "https://api.pingdom.com/api/3.1/summary.performance"
+PERFORMANCE_CACHE_TTL = 1800
+_PERFORMANCE_CACHE: dict[tuple[str, str], tuple[float, dict]] = {}
 
 CDN_MARKERS = (
     "cloudflare",
@@ -23,79 +23,46 @@ CDN_MARKERS = (
     "cdnjs",
 )
 
-PERFORMANCE_FACTOR_WEIGHTS = {
-    "largest_contentful_paint": 7,
-    "cumulative_layout_shift": 5,
-    "first_contentful_paint": 3,
-    "server_response_time": 4,
-    "interaction_responsiveness": 5,
-    "image_optimization": 3,
-    "javascript_optimization": 3,
-    "css_optimization": 3,
-    "caching": 1,
-    "cdn_usage": 1,
-}
+
+def _format_ms(value) -> str:
+    if not isinstance(value, (int, float)):
+        return "Not detected"
+    if value >= 1000:
+        return f"{value / 1000:.2f}s"
+    return f"{int(round(value))}ms"
 
 
-def _extract_audit_recommendations(audits: dict) -> list[str]:
-    recommendations = []
-    candidates = []
-    for audit in audits.values():
-        score = audit.get("score")
-        title = audit.get("title")
-        savings_ms = (((audit.get("details") or {}).get("overallSavingsMs")) or 0)
-        if title and isinstance(score, (int, float)) and score < 0.9:
-            candidates.append((score, savings_ms, title))
-
-    for _, _, title in sorted(candidates, key=lambda item: (item[0], -item[1]))[:3]:
-        recommendations.append(title)
-    return recommendations
+def _format_bytes(value) -> str:
+    if not isinstance(value, (int, float)):
+        return "Not detected"
+    units = ["B", "KB", "MB", "GB"]
+    size = float(value)
+    unit_index = 0
+    while size >= 1024 and unit_index < len(units) - 1:
+        size /= 1024
+        unit_index += 1
+    precision = 0 if unit_index == 0 else 2
+    return f"{size:.{precision}f} {units[unit_index]}"
 
 
-def _numeric_value(audits: dict, audit_id: str):
-    return (audits.get(audit_id) or {}).get("numericValue")
-
-
-def _display_value(audits: dict, audit_id: str, fallback: str = "Not available") -> str:
-    return (audits.get(audit_id) or {}).get("displayValue", fallback)
-
-
-def _audit_score(audits: dict, audit_id: str) -> float | None:
-    score = (audits.get(audit_id) or {}).get("score")
-    if isinstance(score, (int, float)):
-        return max(0.0, min(float(score), 1.0))
+def _cache_get(url: str, profile: str) -> dict | None:
+    cached = _PERFORMANCE_CACHE.get((url, profile))
+    if cached and time.time() - cached[0] < PERFORMANCE_CACHE_TTL:
+        return cached[1]
     return None
 
 
-def _threshold_points(value, good_threshold, warning_threshold, points, lower_is_better=True):
-    if not isinstance(value, (int, float)):
-        return round(points * 0.35, 1)
-    if lower_is_better:
-        if value <= good_threshold:
-            return float(points)
-        if value >= warning_threshold:
-            return 0.0
-        span = warning_threshold - good_threshold
-        ratio = (warning_threshold - value) / span if span else 0
-        return round(points * ratio, 1)
-    if value >= good_threshold:
-        return float(points)
-    if value <= warning_threshold:
-        return 0.0
-    span = good_threshold - warning_threshold
-    ratio = (value - warning_threshold) / span if span else 0
-    return round(points * ratio, 1)
+def _cache_put(url: str, profile: str, payload: dict) -> dict:
+    _PERFORMANCE_CACHE[(url, profile)] = (time.time(), payload)
+    return payload
 
 
-def _metric_factor(name: str, observed: str, benchmark: str, achieved: float, points: int, note: str) -> dict:
-    return {
-        "name": name,
-        "observed": observed,
-        "benchmark": benchmark,
-        "achieved": round(achieved, 1),
-        "points": points,
-        "note": note,
-    }
+def _opportunity(label: str, impact: str, detail: str) -> dict:
+    return {"label": label, "impact": impact, "detail": detail}
+
+
+def _diagnostic(label: str, value: str, detail: str) -> dict:
+    return {"label": label, "value": value, "detail": detail}
 
 
 def _cdn_signal(assets: list[str], headers: dict) -> tuple[bool, str]:
@@ -107,313 +74,370 @@ def _cdn_signal(assets: list[str], headers: dict) -> tuple[bool, str]:
     return False, ""
 
 
-def _build_factor_breakdown(audits: dict, assets: list[str], headers: dict) -> tuple[list[dict], int]:
-    lcp_value = _numeric_value(audits, "largest-contentful-paint")
-    cls_value = _numeric_value(audits, "cumulative-layout-shift")
-    fcp_value = _numeric_value(audits, "first-contentful-paint")
-    ttfb_value = _numeric_value(audits, "server-response-time")
-    inp_value = _numeric_value(audits, "interaction-to-next-paint")
-    tbt_value = _numeric_value(audits, "total-blocking-time")
-    uses_long_cache_score = _audit_score(audits, "uses-long-cache-ttl")
-    image_scores = [
-        score for score in (
-            _audit_score(audits, "modern-image-formats"),
-            _audit_score(audits, "uses-optimized-images"),
-            _audit_score(audits, "offscreen-images"),
-        )
-        if score is not None
-    ]
-    js_scores = [
-        score for score in (
-            _audit_score(audits, "unused-javascript"),
-            _audit_score(audits, "legacy-javascript"),
-            _audit_score(audits, "bootup-time"),
-        )
-        if score is not None
-    ]
-    css_scores = [
-        score for score in (
-            _audit_score(audits, "unused-css-rules"),
-            _audit_score(audits, "unminified-css"),
-            _audit_score(audits, "render-blocking-resources"),
-        )
-        if score is not None
-    ]
+def _build_heuristic_profile(strategy: str, html: str, assets: list[str], headers: dict, warning: str | None = None) -> dict:
+    script_count = sum(1 for asset in assets if ".js" in asset.lower())
+    style_count = sum(1 for asset in assets if ".css" in asset.lower())
+    image_count = sum(1 for asset in assets if any(ext in asset.lower() for ext in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".avif")))
+    request_count = max(len(assets), 1)
+    page_bytes = len((html or "").encode("utf-8")) + (request_count * 24000)
+    compression_enabled = bool(headers.get("Content-Encoding"))
+    caching_enabled = bool(headers.get("Cache-Control"))
     cdn_present, cdn_marker = _cdn_signal(assets, headers)
-    caching_header = str((headers or {}).get("Cache-Control", "")).lower()
 
-    factors = []
-    factors.append(
-        _metric_factor(
-            "LCP",
-            _display_value(audits, "largest-contentful-paint", "Not measured"),
-            "< 2.5s",
-            _threshold_points(lcp_value, 2500, 4000, PERFORMANCE_FACTOR_WEIGHTS["largest_contentful_paint"]),
-            PERFORMANCE_FACTOR_WEIGHTS["largest_contentful_paint"],
-            "Largest Contentful Paint should stay below 2.5 seconds.",
-        )
-    )
-    factors.append(
-        _metric_factor(
-            "CLS",
-            _display_value(audits, "cumulative-layout-shift", "Not measured"),
-            "< 0.1",
-            _threshold_points(cls_value, 0.1, 0.25, PERFORMANCE_FACTOR_WEIGHTS["cumulative_layout_shift"]),
-            PERFORMANCE_FACTOR_WEIGHTS["cumulative_layout_shift"],
-            "Cumulative Layout Shift should stay below 0.1.",
-        )
-    )
-    factors.append(
-        _metric_factor(
-            "FCP",
-            _display_value(audits, "first-contentful-paint", "Not measured"),
-            "< 1.8s",
-            _threshold_points(fcp_value, 1800, 3000, PERFORMANCE_FACTOR_WEIGHTS["first_contentful_paint"]),
-            PERFORMANCE_FACTOR_WEIGHTS["first_contentful_paint"],
-            "First Contentful Paint should stay below 1.8 seconds.",
-        )
-    )
-    factors.append(
-        _metric_factor(
-            "TTFB",
-            _display_value(audits, "server-response-time", "Not measured"),
-            "< 800ms",
-            _threshold_points(ttfb_value, 800, 1800, PERFORMANCE_FACTOR_WEIGHTS["server_response_time"]),
-            PERFORMANCE_FACTOR_WEIGHTS["server_response_time"],
-            "Server response time should stay below 800ms.",
-        )
-    )
+    base_score = 86 if strategy == "desktop" else 72
+    penalties = 0
+    opportunities = []
 
-    interaction_observed = (
-        _display_value(audits, "interaction-to-next-paint", "")
-        if isinstance(inp_value, (int, float))
-        else _display_value(audits, "total-blocking-time", "Not measured")
-    )
-    interaction_benchmark = "< 200ms INP/TBT"
-    interaction_points = _threshold_points(
-        inp_value if isinstance(inp_value, (int, float)) else tbt_value,
-        200,
-        500 if isinstance(inp_value, (int, float)) else 600,
-        PERFORMANCE_FACTOR_WEIGHTS["interaction_responsiveness"],
-    )
-    factors.append(
-        _metric_factor(
-            "INP / TBT",
-            interaction_observed or "Not measured",
-            interaction_benchmark,
-            interaction_points,
-            PERFORMANCE_FACTOR_WEIGHTS["interaction_responsiveness"],
-            "Interaction responsiveness should stay below 200ms.",
-        )
-    )
+    if page_bytes > 2_000_000:
+        penalties += 14
+        opportunities.append(_opportunity("Reduce page weight", "High", "Large transfer size is likely slowing first and repeat visits."))
+    elif page_bytes > 1_000_000:
+        penalties += 8
 
-    image_score = round((mean(image_scores) if image_scores else 0.35) * PERFORMANCE_FACTOR_WEIGHTS["image_optimization"], 1)
-    factors.append(
-        _metric_factor(
-            "Image Optimization",
-            "Optimized" if image_score >= 2.4 else "Needs work",
-            "Modern formats, compression, lazy loading",
-            image_score,
-            PERFORMANCE_FACTOR_WEIGHTS["image_optimization"],
-            "Large image payloads slow rendering and increase mobile LCP.",
-        )
-    )
+    if request_count > 80:
+        penalties += 10
+        opportunities.append(_opportunity("Reduce request count", "High", "High request volume increases connection and waterfall overhead."))
+    elif request_count > 45:
+        penalties += 5
 
-    js_score = round((mean(js_scores) if js_scores else 0.35) * PERFORMANCE_FACTOR_WEIGHTS["javascript_optimization"], 1)
-    factors.append(
-        _metric_factor(
-            "JS Optimization",
-            "Optimized" if js_score >= 2.4 else "Needs work",
-            "Low unused JS, fast boot-up, modern bundle",
-            js_score,
-            PERFORMANCE_FACTOR_WEIGHTS["javascript_optimization"],
-            "Heavy JavaScript affects execution cost and interaction readiness.",
-        )
-    )
+    if script_count > 16:
+        penalties += 10 if strategy == "mobile" else 8
+        opportunities.append(_opportunity("Reduce JavaScript execution", "High", "Heavy JavaScript increases main-thread work and blocking time."))
+    elif script_count > 10:
+        penalties += 5
 
-    css_score = round((mean(css_scores) if css_scores else 0.35) * PERFORMANCE_FACTOR_WEIGHTS["css_optimization"], 1)
-    factors.append(
-        _metric_factor(
-            "CSS Optimization",
-            "Optimized" if css_score >= 2.4 else "Needs work",
-            "Low unused CSS and minimal render blocking",
-            css_score,
-            PERFORMANCE_FACTOR_WEIGHTS["css_optimization"],
-            "Blocking or unused CSS delays first paint.",
-        )
-    )
+    if image_count > 24:
+        penalties += 7
+        opportunities.append(_opportunity("Optimize image payloads", "Medium", "Large image inventory should be compressed, modernized, and lazy-loaded."))
+    elif image_count > 12:
+        penalties += 4
 
-    cache_points = PERFORMANCE_FACTOR_WEIGHTS["caching"] if uses_long_cache_score and uses_long_cache_score >= 0.9 else 0.5 if ("max-age" in caching_header or uses_long_cache_score) else 0.0
-    factors.append(
-        _metric_factor(
-            "Caching",
-            "Present" if cache_points >= 1 else "Weak or missing",
-            "Long-lived cache headers on static assets",
-            cache_points,
-            PERFORMANCE_FACTOR_WEIGHTS["caching"],
-            "Browser caching reduces repeat-visit payload cost.",
-        )
-    )
+    if style_count > 6:
+        penalties += 5
+        opportunities.append(_opportunity("Reduce render-blocking CSS", "Medium", "Too many stylesheets can delay first render."))
 
-    cdn_points = float(PERFORMANCE_FACTOR_WEIGHTS["cdn_usage"]) if cdn_present else 0.0
-    factors.append(
-        _metric_factor(
-            "CDN Usage",
-            f"Observed ({cdn_marker})" if cdn_present else "Not clearly exposed",
-            "Edge/CDN delivery visible from headers or assets",
-            cdn_points,
-            PERFORMANCE_FACTOR_WEIGHTS["cdn_usage"],
-            "A CDN often improves latency and cache reach for public assets.",
-        )
-    )
+    if not compression_enabled:
+        penalties += 8
+        opportunities.append(_opportunity("Enable compression", "High", "Responses should expose gzip or Brotli compression."))
+    if not caching_enabled:
+        penalties += 6
+        opportunities.append(_opportunity("Strengthen caching", "Medium", "Static assets should expose stronger cache directives."))
 
-    achieved_total = round(sum(item["achieved"] for item in factors), 1)
-    max_points = sum(item["points"] for item in factors)
-    benchmark_score = round((achieved_total / max_points) * 100)
-    return factors, benchmark_score
+    if strategy == "mobile":
+        penalties += 6
 
+    score = max(base_score - penalties, 25)
+    performance_score = max(score - 4, 20)
+    structure_score = min(score + 6, 95)
 
-def _strategy_payload(url: str, strategy: str, timeout: int, assets: list[str] | None = None, headers: dict | None = None) -> dict:
-    cache_key = (url, strategy)
-    cached = _PAGESPEED_CACHE.get(cache_key)
-    if cached and time.time() - cached[0] < PAGESPEED_CACHE_TTL:
-        return cached[1]
-
-    params = {
-        "url": url,
+    profile = {
         "strategy": strategy,
-        "category": "performance",
+        "provider": "heuristic",
+        "source": "Estimated Performance Score (API unavailable)",
+        "estimated": True,
+        "score": score,
+        "benchmark_score": score,
+        "performance_score": performance_score,
+        "structure_score": structure_score,
+        "gtmetrix_grade": "Estimated",
+        "fully_loaded_time": _format_ms(3600 + (request_count * 35) + (script_count * 18)),
+        "total_page_size": _format_bytes(page_bytes),
+        "total_requests": request_count,
+        "time_to_first_byte": _format_ms(600 if compression_enabled else 900),
+        "largest_contentful_paint": _format_ms(2400 + (image_count * 50) + (0 if cdn_present else 350)),
+        "cumulative_layout_shift": "Not measured in fallback mode",
+        "first_contentful_paint": _format_ms(1500 + (style_count * 80)),
+        "interactive": _format_ms(180 + (script_count * 30)),
+        "opportunities": opportunities[:4] or [_opportunity("Run live performance testing", "Medium", "Enable GTmetrix to replace this estimate with real browser-based results.")],
+        "diagnostics": [
+            _diagnostic("Page Weight Impact", _format_bytes(page_bytes), "Estimated from HTML size and request volume."),
+            _diagnostic("JS Execution Impact", f"{script_count} script asset(s)", "Estimated from visible script count."),
+            _diagnostic("Image Optimization", f"{image_count} image asset(s)", "Estimated from visible image volume and formats."),
+            _diagnostic("Caching Efficiency", headers.get("Cache-Control", "Not exposed"), "Derived from the landing page response headers."),
+            _diagnostic("CDN Usage", f"Observed ({cdn_marker})" if cdn_present else "Not clearly exposed", "Derived from public headers and asset hosts."),
+        ],
+        "recommendations": [item["label"] for item in opportunities[:3]],
     }
-    api_key = os.getenv("GOOGLE_PAGESPEED_API_KEY", "").strip()
-    if api_key:
-        params["key"] = api_key
+    if warning:
+        profile["warning"] = warning
+    return profile
 
-    response = requests.get(
-        PAGESPEED_API_URL,
-        params=params,
+
+def _gtmetrix_session(api_key: str) -> requests.Session:
+    session = requests.Session()
+    session.auth = (api_key, "")
+    session.headers.update({
+        "Accept": "application/vnd.api+json",
+        "Content-Type": "application/vnd.api+json",
+    })
+    return session
+
+
+def _gtmetrix_profile_config(strategy: str) -> dict:
+    upper = strategy.upper()
+    config = {
+        "location": os.getenv(f"GTMETRIX_{upper}_LOCATION", "").strip(),
+        "browser": os.getenv(f"GTMETRIX_{upper}_BROWSER", "").strip(),
+        "device": os.getenv(f"GTMETRIX_{upper}_DEVICE", "").strip(),
+    }
+    if strategy == "mobile" and not any(config.values()):
+        return {}
+    return {key: value for key, value in config.items() if value}
+
+
+def _start_gtmetrix_test(session: requests.Session, url: str, strategy: str, timeout: int) -> str:
+    attributes = {
+        "url": url,
+        "report": "lighthouse",
+    }
+    attributes.update(_gtmetrix_profile_config(strategy))
+    response = session.post(
+        f"{GTMETRIX_BASE_URL}/tests",
+        json={"data": {"type": "test", "attributes": attributes}},
         timeout=timeout,
     )
     response.raise_for_status()
     payload = response.json()
-    lighthouse = payload.get("lighthouseResult") or {}
-    category = (lighthouse.get("categories") or {}).get("performance") or {}
-    audits = lighthouse.get("audits") or {}
-    score = category.get("score")
-    benchmark_breakdown, benchmark_score = _build_factor_breakdown(audits, assets or [], headers or {})
-    result = {
-        "strategy": strategy,
-        "score": round(score * 100) if isinstance(score, (int, float)) else None,
-        "benchmark_score": benchmark_score,
-        "benchmark_breakdown": benchmark_breakdown,
-        "largest_contentful_paint": (audits.get("largest-contentful-paint") or {}).get("displayValue", "Not available"),
-        "first_contentful_paint": (audits.get("first-contentful-paint") or {}).get("displayValue", "Not available"),
-        "cumulative_layout_shift": (audits.get("cumulative-layout-shift") or {}).get("displayValue", "Not available"),
-        "interactive": (audits.get("interaction-to-next-paint") or {}).get("displayValue")
-        or (audits.get("total-blocking-time") or {}).get("displayValue")
-        or (audits.get("interactive") or {}).get("displayValue", "Not available"),
-        "time_to_first_byte": (audits.get("server-response-time") or {}).get("displayValue", "Not available"),
-        "recommendations": _extract_audit_recommendations(audits),
-        "source": "Google PageSpeed Insights",
-        "estimated": False,
+    link = response.headers.get("Location") or (((payload.get("links") or {}).get("self")) or "")
+    if not link:
+        raise RuntimeError("GTmetrix did not return a test poll URL.")
+    if link.startswith("http"):
+        return link
+    return f"https://gtmetrix.com{link}"
+
+
+def _poll_gtmetrix_test(session: requests.Session, poll_url: str, timeout: int, max_polls: int = 20) -> str:
+    for _ in range(max_polls):
+        response = session.get(poll_url, timeout=timeout, allow_redirects=False)
+        if response.status_code == 303:
+            location = response.headers.get("Location") or ""
+            return location if location.startswith("http") else f"https://gtmetrix.com{location}"
+        response.raise_for_status()
+        payload = response.json()
+        attributes = ((payload.get("data") or {}).get("attributes") or {})
+        state = attributes.get("state")
+        if state == "completed":
+            report_url = (((payload.get("data") or {}).get("links") or {}).get("report")) or response.headers.get("Location") or ""
+            if report_url:
+                return report_url if report_url.startswith("http") else f"https://gtmetrix.com{report_url}"
+        if state == "error":
+            raise RuntimeError(attributes.get("error") or "GTmetrix test finished with an error state.")
+        retry_after = response.headers.get("Retry-After")
+        sleep_seconds = int(retry_after) if retry_after and retry_after.isdigit() else 3
+        time.sleep(sleep_seconds)
+    raise RuntimeError("GTmetrix test polling timed out before the report was ready.")
+
+
+def _fetch_gtmetrix_json(session: requests.Session, url: str, timeout: int) -> dict:
+    response = session.get(url, timeout=timeout)
+    response.raise_for_status()
+    return response.json()
+
+
+def _extract_gtmetrix_opportunities(lighthouse_payload: dict) -> tuple[list[dict], list[dict]]:
+    audits = ((lighthouse_payload.get("audits") or {}) if isinstance(lighthouse_payload, dict) else {})
+    opportunities = []
+    diagnostics = []
+    audit_map = {
+        "uses-optimized-images": "Optimize images",
+        "modern-image-formats": "Serve modern image formats",
+        "offscreen-images": "Lazy-load offscreen images",
+        "unused-javascript": "Reduce unused JavaScript",
+        "legacy-javascript": "Avoid legacy JavaScript",
+        "bootup-time": "Reduce JS execution time",
+        "unused-css-rules": "Reduce unused CSS",
+        "render-blocking-resources": "Reduce render-blocking resources",
+        "uses-long-cache-ttl": "Strengthen static caching",
     }
-    _PAGESPEED_CACHE[cache_key] = (time.time(), result)
-    return result
+    for audit_id, label in audit_map.items():
+        audit = audits.get(audit_id) or {}
+        score = audit.get("score")
+        impact_score = audit.get("_impactScore")
+        if isinstance(score, (int, float)) and score >= 0.9:
+            continue
+        detail = audit.get("description") or audit.get("displayValue") or "Review this GTmetrix audit in the full report."
+        impact = "High" if isinstance(impact_score, (int, float)) and impact_score >= 0.48 else "Medium" if isinstance(impact_score, (int, float)) and impact_score >= 0.24 else "Low"
+        if score is not None:
+            opportunities.append(_opportunity(label, impact, detail))
+
+    diagnostic_ids = {
+        "uses-long-cache-ttl": "Caching Efficiency",
+        "bootup-time": "JS Execution Impact",
+        "render-blocking-resources": "CSS Blocking Impact",
+        "offscreen-images": "Image Loading Impact",
+    }
+    for audit_id, label in diagnostic_ids.items():
+        audit = audits.get(audit_id) or {}
+        observed = audit.get("displayValue") or "Not detected"
+        detail = audit.get("description") or "Reported by GTmetrix."
+        diagnostics.append(_diagnostic(label, observed, detail))
+    return opportunities[:5], diagnostics
 
 
-def _fallback_strategy_payload(strategy: str, html: str, assets: list[str], headers: dict) -> dict:
-    script_count = sum(1 for asset in assets if ".js" in asset.lower())
-    style_count = sum(1 for asset in assets if ".css" in asset.lower())
-    image_count = sum(1 for asset in assets if any(ext in asset.lower() for ext in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg")))
-    html_size_kb = max(len((html or "").encode("utf-8")) // 1024, 1)
-    compression_enabled = bool(headers.get("Content-Encoding"))
-    caching_enabled = bool(headers.get("Cache-Control"))
-    base_score = 82 if strategy == "desktop" else 74
-    penalties = 0
-    recommendations = []
-
-    if html_size_kb > 180:
-        penalties += 8
-        recommendations.append("Reduce HTML payload size on the landing page")
-    if script_count > 12:
-        penalties += 10 if strategy == "mobile" else 8
-        recommendations.append("Reduce JavaScript payload and execution cost")
-    if style_count > 6:
-        penalties += 4
-        recommendations.append("Consolidate or defer non-critical CSS")
-    if image_count > 20:
-        penalties += 6
-        recommendations.append("Compress and lazy-load large image sets")
-    if not compression_enabled:
-        penalties += 10
-        recommendations.append("Enable Brotli or gzip compression")
-    if not caching_enabled:
-        penalties += 6
-        recommendations.append("Expose stronger cache-control for static assets")
-
-    benchmark_breakdown = []
-    script_count = max(script_count, 1)
-    style_count = max(style_count, 1)
-    image_count = max(image_count, 1)
+def _normalize_gtmetrix_report(strategy: str, report_payload: dict, lighthouse_payload: dict, assets: list[str], headers: dict) -> dict:
+    data = report_payload.get("data") or {}
+    attributes = data.get("attributes") or {}
+    links = data.get("links") or {}
+    audits = (lighthouse_payload or {}).get("audits") or {}
     cdn_present, cdn_marker = _cdn_signal(assets, headers)
-    compression_label = headers.get("Content-Encoding", "Not exposed")
-    cache_label = headers.get("Cache-Control", "Not exposed")
-    benchmark_breakdown.append(_metric_factor("LCP", "Estimated from payload", "< 2.5s", 4.5 if html_size_kb < 140 else 2.0, PERFORMANCE_FACTOR_WEIGHTS["largest_contentful_paint"], "Estimated from HTML and asset weight."))
-    benchmark_breakdown.append(_metric_factor("CLS", "Not measured passively", "< 0.1", 1.8, PERFORMANCE_FACTOR_WEIGHTS["cumulative_layout_shift"], "Layout shift needs live browser measurement."))
-    benchmark_breakdown.append(_metric_factor("FCP", "Estimated from payload", "< 1.8s", 2.0 if style_count <= 4 else 1.0, PERFORMANCE_FACTOR_WEIGHTS["first_contentful_paint"], "Estimated from render-blocking payload size."))
-    benchmark_breakdown.append(_metric_factor("TTFB", compression_label, "< 800ms", 2.5 if headers.get("Server-Timing") else 1.5, PERFORMANCE_FACTOR_WEIGHTS["server_response_time"], "Passive mode cannot measure TTFB precisely."))
-    benchmark_breakdown.append(_metric_factor("INP / TBT", "Not measured passively", "< 200ms INP/TBT", 2.0 if script_count <= 8 else 0.8, PERFORMANCE_FACTOR_WEIGHTS["interaction_responsiveness"], "Estimated from visible JavaScript weight."))
-    benchmark_breakdown.append(_metric_factor("Image Optimization", f"{image_count} image asset(s)", "Modern formats, compression, lazy loading", 2.5 if image_count <= 12 else 1.2, PERFORMANCE_FACTOR_WEIGHTS["image_optimization"], "Passive evidence checks image count and formats only."))
-    benchmark_breakdown.append(_metric_factor("JS Optimization", f"{script_count} script asset(s)", "Low unused JS, fast boot-up, modern bundle", 2.5 if script_count <= 8 else 1.0, PERFORMANCE_FACTOR_WEIGHTS["javascript_optimization"], "Passive evidence checks script count only."))
-    benchmark_breakdown.append(_metric_factor("CSS Optimization", f"{style_count} stylesheet(s)", "Low unused CSS and minimal render blocking", 2.5 if style_count <= 4 else 1.0, PERFORMANCE_FACTOR_WEIGHTS["css_optimization"], "Passive evidence checks stylesheet count only."))
-    benchmark_breakdown.append(_metric_factor("Caching", cache_label, "Long-lived cache headers on static assets", 1.0 if caching_enabled else 0.0, PERFORMANCE_FACTOR_WEIGHTS["caching"], "Derived from public cache headers."))
-    benchmark_breakdown.append(_metric_factor("CDN Usage", f"Observed ({cdn_marker})" if cdn_present else "Not clearly exposed", "Edge/CDN delivery visible from headers or assets", 1.0 if cdn_present else 0.0, PERFORMANCE_FACTOR_WEIGHTS["cdn_usage"], "Derived from public headers and asset hosts."))
 
-    benchmark_total = sum(item["achieved"] for item in benchmark_breakdown)
-    score = max(base_score - penalties, 35)
-    benchmark_score = round((benchmark_total / sum(item["points"] for item in benchmark_breakdown)) * 100)
+    performance_score = attributes.get("performance_score")
+    structure_score = attributes.get("structure_score")
+    combined_score = round((performance_score * 0.6) + (structure_score * 0.4)) if isinstance(performance_score, (int, float)) and isinstance(structure_score, (int, float)) else attributes.get("gtmetrix_score")
+
+    ttfb_ms = (audits.get("server-response-time") or {}).get("numericValue")
+    lcp_ms = (audits.get("largest-contentful-paint") or {}).get("numericValue")
+    fcp_ms = (audits.get("first-contentful-paint") or {}).get("numericValue")
+    tbt_ms = (audits.get("total-blocking-time") or {}).get("numericValue")
+    cls_value = attributes.get("cumulative_layout_shift")
+    fully_loaded_time = attributes.get("fully_loaded_time") or attributes.get("fully_loaded_timing")
+
+    opportunities, diagnostics = _extract_gtmetrix_opportunities(lighthouse_payload)
+    diagnostics.extend(
+        [
+            _diagnostic("Page Weight Impact", _format_bytes(attributes.get("page_bytes")), "Reported by GTmetrix from the completed page load."),
+            _diagnostic("Total Requests", str(attributes.get("page_requests", "Not detected")), "Reported by GTmetrix from the completed page load."),
+            _diagnostic("CDN Usage", f"Observed ({cdn_marker})" if cdn_present else "Not clearly exposed", "Derived from public headers and asset hosts."),
+        ]
+    )
+
     return {
         "strategy": strategy,
-        "score": score,
-        "benchmark_score": benchmark_score,
-        "benchmark_breakdown": benchmark_breakdown,
-        "largest_contentful_paint": "Estimated from passive evidence",
-        "first_contentful_paint": "Estimated from passive evidence",
-        "cumulative_layout_shift": "Not measured in fallback mode",
-        "interactive": "Estimated from passive evidence",
-        "time_to_first_byte": "Not measured in fallback mode",
-        "recommendations": recommendations[:3] or ["Run a live Lighthouse audit for precise performance diagnostics"],
-        "source": "Passive performance estimate",
-        "estimated": True,
+        "provider": "gtmetrix",
+        "source": "GTmetrix API",
+        "estimated": False,
+        "score": combined_score if isinstance(combined_score, int) else None,
+        "benchmark_score": combined_score if isinstance(combined_score, int) else None,
+        "performance_score": performance_score,
+        "structure_score": structure_score,
+        "gtmetrix_score": attributes.get("gtmetrix_score"),
+        "gtmetrix_grade": attributes.get("gtmetrix_grade", "Not detected"),
+        "fully_loaded_time": _format_ms(fully_loaded_time),
+        "total_page_size": _format_bytes(attributes.get("page_bytes")),
+        "total_requests": attributes.get("page_requests", "Not detected"),
+        "time_to_first_byte": _format_ms(ttfb_ms if isinstance(ttfb_ms, (int, float)) else attributes.get("backend_duration")),
+        "largest_contentful_paint": _format_ms(lcp_ms) if isinstance(lcp_ms, (int, float)) else "Not detected",
+        "cumulative_layout_shift": f"{cls_value:.3f}" if isinstance(cls_value, (int, float)) else "Not detected",
+        "first_contentful_paint": _format_ms(fcp_ms) if isinstance(fcp_ms, (int, float)) else "Not detected",
+        "interactive": _format_ms(tbt_ms) if isinstance(tbt_ms, (int, float)) else "Not detected",
+        "opportunities": opportunities,
+        "diagnostics": diagnostics[:6],
+        "recommendations": [item["label"] for item in opportunities[:3]],
+        "report_url": links.get("report_url"),
     }
 
 
-def run_pagespeed_audit(url: str, html: str = "", assets: list[str] | None = None, headers: dict | None = None, timeout: int = 25) -> dict:
-    """Fetch mobile and desktop PageSpeed summaries from the PSI API, with passive fallback."""
+def _run_gtmetrix_profile(url: str, strategy: str, timeout: int, assets: list[str], headers: dict) -> dict:
+    cached = _cache_get(url, f"gtmetrix:{strategy}")
+    if cached:
+        return cached
+
+    api_key = os.getenv("GTMETRIX_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("GTmetrix API key is not configured.")
+
+    if strategy == "mobile" and not _gtmetrix_profile_config("mobile"):
+        raise RuntimeError("GTmetrix mobile profile is not configured.")
+
+    session = _gtmetrix_session(api_key)
+    poll_url = _start_gtmetrix_test(session, url, strategy, timeout)
+    report_url = _poll_gtmetrix_test(session, poll_url, timeout)
+    report_payload = _fetch_gtmetrix_json(session, report_url, timeout)
+    lighthouse_url = (((report_payload.get("data") or {}).get("links") or {}).get("lighthouse")) or ""
+    lighthouse_payload = _fetch_gtmetrix_json(session, lighthouse_url, timeout) if lighthouse_url else {}
+    return _cache_put(url, f"gtmetrix:{strategy}", _normalize_gtmetrix_report(strategy, report_payload, lighthouse_payload, assets, headers))
+
+
+def _run_pingdom_profile(url: str, strategy: str, timeout: int) -> dict:
+    api_token = os.getenv("PINGDOM_API_TOKEN", "").strip()
+    check_id = os.getenv(f"PINGDOM_{strategy.upper()}_CHECK_ID", "").strip()
+    if not api_token or not check_id:
+        raise RuntimeError("Pingdom fallback is not configured.")
+
+    pingdom_url = os.getenv("PINGDOM_API_URL", PINGDOM_DEFAULT_URL).strip()
+    response = requests.get(
+        pingdom_url,
+        params={"checkid": check_id, "includeuptime": "true"},
+        headers={"Authorization": f"Bearer {api_token}"},
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    summary = payload.get("summary") or payload.get("performance") or payload
+    load_time = summary.get("avgresponse") or summary.get("loadtime")
+    page_size = summary.get("pagesize")
+    requests_count = summary.get("requests")
+    performance_grade = summary.get("grade") or summary.get("performance")
+    score = int(performance_grade) if isinstance(performance_grade, (int, float)) else None
+    if score is None:
+        raise RuntimeError("Pingdom response did not include a usable performance grade.")
+    return {
+        "strategy": strategy,
+        "provider": "pingdom",
+        "source": "Pingdom API",
+        "estimated": False,
+        "score": score,
+        "benchmark_score": score,
+        "performance_score": score,
+        "structure_score": score,
+        "gtmetrix_score": None,
+        "gtmetrix_grade": "Pingdom",
+        "fully_loaded_time": _format_ms(load_time),
+        "total_page_size": _format_bytes(page_size),
+        "total_requests": requests_count or "Not detected",
+        "time_to_first_byte": "Not detected",
+        "largest_contentful_paint": "Not detected",
+        "cumulative_layout_shift": "Not detected",
+        "first_contentful_paint": "Not detected",
+        "interactive": "Not detected",
+        "opportunities": [],
+        "diagnostics": [_diagnostic("Fallback Provider", "Pingdom", "Used because GTmetrix was unavailable for this scan.")],
+        "recommendations": [],
+    }
+
+
+def run_pagespeed_audit(url: str, html: str = "", assets: list[str] | None = None, headers: dict | None = None, timeout: int = 30) -> dict:
+    """Run GTmetrix-backed performance analysis with Pingdom and heuristic fallbacks."""
     assets = assets or []
     headers = headers or {}
-    try:
-        return {
-            "mobile": _strategy_payload(url, "mobile", timeout, assets=assets, headers=headers),
-            "desktop": _strategy_payload(url, "desktop", timeout, assets=assets, headers=headers),
-            "error": None,
-            "warning": None,
-        }
-    except requests.HTTPError as exc:
-        status_code = exc.response.status_code if exc.response is not None else None
-        return {
-            "mobile": _fallback_strategy_payload("mobile", html, assets, headers),
-            "desktop": _fallback_strategy_payload("desktop", html, assets, headers),
-            "error": None,
-            "warning": (
-                "Google PageSpeed Insights was unavailable, so this section is showing a passive performance estimate."
-                if status_code == 429
-                else f"Google PageSpeed Insights was unavailable ({status_code or 'request error'}), so this section is showing a passive performance estimate."
-            ),
-        }
-    except requests.RequestException as exc:
-        return {
-            "mobile": _fallback_strategy_payload("mobile", html, assets, headers),
-            "desktop": _fallback_strategy_payload("desktop", html, assets, headers),
-            "error": None,
-            "warning": f"Google PageSpeed Insights was unavailable, so this section is showing a passive performance estimate.",
-        }
+    warnings = []
+    profiles = {}
+
+    for strategy in ("desktop", "mobile"):
+        try:
+            profiles[strategy] = _run_gtmetrix_profile(url, strategy, timeout, assets, headers)
+            continue
+        except requests.HTTPError as exc:
+            status_code = exc.response.status_code if exc.response is not None else None
+            warnings.append(f"GTmetrix {strategy} test was unavailable ({status_code or 'request error'}).")
+        except (requests.RequestException, RuntimeError) as exc:
+            warnings.append(f"GTmetrix {strategy} test was unavailable: {exc}")
+
+        try:
+            profiles[strategy] = _run_pingdom_profile(url, strategy, timeout)
+            warnings.append(f"Pingdom fallback was used for the {strategy} profile.")
+            continue
+        except (requests.RequestException, RuntimeError):
+            pass
+
+        profiles[strategy] = _build_heuristic_profile(
+            strategy,
+            html,
+            assets,
+            headers,
+            warning="Estimated Performance Score (API unavailable)",
+        )
+
+    warning_text = " ".join(dict.fromkeys(warnings)) if warnings else None
+    if profiles.get("desktop", {}).get("provider") == "heuristic" or profiles.get("mobile", {}).get("provider") == "heuristic":
+        warning_text = (
+            f"{warning_text} Estimated Performance Score (API unavailable)." if warning_text else "Estimated Performance Score (API unavailable)."
+        )
+
+    return {
+        "desktop": profiles.get("desktop"),
+        "mobile": profiles.get("mobile"),
+        "error": None,
+        "warning": warning_text,
+        "provider": "gtmetrix" if any((profiles.get(item) or {}).get("provider") == "gtmetrix" for item in ("desktop", "mobile")) else "fallback",
+    }

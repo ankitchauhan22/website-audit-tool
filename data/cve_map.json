@@ -1,0 +1,54 @@
+{
+  "Drupal": [
+    {
+      "constraint": "9.x",
+      "id": "CVE-2023-23909",
+      "severity": "High",
+      "description": "Drupal core access-bypass issue affecting supported 9.x lines before vendor remediation."
+    },
+    {
+      "constraint": "9.x",
+      "id": "CVE-2022-25277",
+      "severity": "Moderate",
+      "description": "Drupal core input handling issue present on older 9.x releases."
+    }
+  ],
+  "WordPress": [
+    {
+      "constraint": "<6.4.3",
+      "id": "CVE-2024-31210",
+      "severity": "Moderate",
+      "description": "Representative WordPress core security issue affecting older public releases."
+    }
+  ],
+  "jQuery": [
+    {
+      "constraint": "<3.5.0",
+      "id": "CVE-2020-11022",
+      "severity": "High",
+      "description": "XSS issue in jQuery htmlPrefilter logic affecting older versions."
+    },
+    {
+      "constraint": "<3.5.0",
+      "id": "CVE-2020-11023",
+      "severity": "High",
+      "description": "XSS issue in jQuery DOM manipulation handling affecting older versions."
+    }
+  ],
+  "jQuery UI": [
+    {
+      "constraint": "<1.13.0",
+      "id": "CVE-2021-41182",
+      "severity": "Medium",
+      "description": "jQuery UI XSS issue affecting autocomplete-related handling."
+    }
+  ],
+  "Bootstrap": [
+    {
+      "constraint": "<3.4.1",
+      "id": "CVE-2019-8331",
+      "severity": "Medium",
+      "description": "Bootstrap XSS vulnerability in tooltip/popover data template handling."
+    }
+  ]
+}

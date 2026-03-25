@@ -88,9 +88,17 @@ def _fetch_with_requests(
                 verify=verify,
             )
             response.raise_for_status()
+            response_headers = requests.structures.CaseInsensitiveDict(response.headers)
+            version = getattr(response.raw, "version", None)
+            if version == 20:
+                response_headers["X-Audit-HTTP-Version"] = "HTTP/2"
+            elif version == 11:
+                response_headers["X-Audit-HTTP-Version"] = "HTTP/1.1"
+            elif version == 10:
+                response_headers["X-Audit-HTTP-Version"] = "HTTP/1.0"
             return (
                 response.text,
-                response.headers,
+                response_headers,
                 response.url,
                 list(response.cookies.keys()),
                 _set_cookie_headers_from_response(response),
@@ -136,6 +144,8 @@ def _parse_curl_header_blocks(raw_headers: str) -> tuple[requests.structures.Cas
     final_block = blocks[-1]
     message = Parser().parsestr("\n".join(final_block[1:]))
     headers = requests.structures.CaseInsensitiveDict(dict(message.items()))
+    if final_block and final_block[0].startswith("HTTP/"):
+        headers["X-Audit-HTTP-Version"] = final_block[0].split(" ", 1)[0].upper()
     set_cookie_headers = message.get_all("Set-Cookie", []) or []
     return headers, set_cookie_headers
 

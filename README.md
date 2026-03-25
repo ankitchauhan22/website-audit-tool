@@ -51,7 +51,7 @@ python3 app.py
 - The audit is passive only. It relies on public HTML, headers, asset paths, cookie names, and generator metadata.
 - CMS detection includes traditional platforms, proprietary builders, headless CMS products, and government-focused platforms such as SharePoint, Sitefinity, CivicPlus, CivicLive, ProdCity, TerminalFour, ButterCMS, Craft CMS, and Granicus products when strong public signals are present.
 - The built-in profiler now groups detections into stable presentation sections instead of a long mixed list.
-- Technology signatures live in [detectors/stack_detector.py](/var/www/website-audit-tool/detectors/stack_detector.py) and can be extended safely over time.
+- Technology signatures live in [data/technologies.json](/var/www/website-audit-tool/data/technologies.json) and the fingerprint engine in [detectors/technology_matcher.py](/var/www/website-audit-tool/detectors/technology_matcher.py).
 - The CMS classifier lives in [detectors/cms_detector.py](/var/www/website-audit-tool/detectors/cms_detector.py) and produces a ranked primary/secondary CMS summary.
 - WordPress recommended versions are resolved live from the official WordPress core update API instead of relying on a stale hardcoded release string.
 
@@ -137,6 +137,6 @@ Required GitHub repository secrets for Vercel deployment:
 ## Extending the tool
 
 - Add new CMS fingerprints in [detectors/cms_detector.py](/var/www/website-audit-tool/detectors/cms_detector.py)
-- Expand passive technology signatures in [detectors/stack_detector.py](/var/www/website-audit-tool/detectors/stack_detector.py)
+- Expand passive technology signatures in [data/technologies.json](/var/www/website-audit-tool/data/technologies.json) and [detectors/technology_matcher.py](/var/www/website-audit-tool/detectors/technology_matcher.py)
 - Tune score weighting in [services/score_engine.py](/var/www/website-audit-tool/services/score_engine.py)
 - Adjust the presentation in [templates/index.html](/var/www/website-audit-tool/templates/index.html)

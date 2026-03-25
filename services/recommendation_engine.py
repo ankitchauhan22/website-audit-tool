@@ -180,7 +180,7 @@ def generate_recommendations(scan):
                 _recommendation_item(
                     "high",
                     f"Improve {strategy} page speed",
-                    f"Prioritize the main Lighthouse opportunities for the {strategy} experience and retest after deployment.",
+                    f"Prioritize the highest-impact GTmetrix or provider opportunities for the {strategy} experience and retest after deployment.",
                     ", ".join(audit.get("recommendations", [])[:3]) or f"{strategy.title()} score: {score}",
                 )
             )

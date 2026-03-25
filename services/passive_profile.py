@@ -115,6 +115,8 @@ def build_transport_profile(final_url: str, headers, fetch_warning: str | None =
     """Summarize transport- and cache-related response signals."""
     parsed = urlparse(final_url)
     is_https = parsed.scheme == "https"
+    http_version = headers.get("X-Audit-HTTP-Version", "Not detected")
+    alt_svc = headers.get("Alt-Svc", "")
     profile = [
         {
             "check": "HTTPS",
@@ -135,6 +137,11 @@ def build_transport_profile(final_url: str, headers, fetch_warning: str | None =
             "check": "Cache Control",
             "value": headers.get("Cache-Control", "Not exposed"),
             "detail": "Caching directives surfaced in the response",
+        },
+        {
+            "check": "HTTP Protocol",
+            "value": "HTTP/3 available" if "h3" in alt_svc.lower() else http_version,
+            "detail": "Protocol observed during fetch or advertised via Alt-Svc.",
         },
     ]
 
@@ -280,6 +287,10 @@ def group_stack_signals(technology_stack):
         ]
         if not items:
             continue
+        items = sorted(
+            items,
+            key=lambda item: (-item.get("confidence_score", 0), item.get("name", "").lower()),
+        )
         risk_count = sum(
             1 for item in items if item.get("status") in {"Outdated", "Deprecated"}
         )
@@ -312,7 +323,10 @@ def group_stack_signals(technology_stack):
                 f"{current_count} current and {managed_count} managed technology finding{'s' if total_verified != 1 else ''} {verb} verified from public evidence."
             )
         else:
-            summary = "Technology signals were observed, but internal version verification is still needed to confirm maintenance status."
+            summary = (
+                f"{len(items)} publicly visible signal{'s' if len(items) != 1 else ''} support this section, "
+                "but version and lifecycle certainty still depend on the exposed evidence."
+            )
         grouped.append(
             {
                 "title": section["title"],

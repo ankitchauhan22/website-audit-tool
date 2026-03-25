@@ -83,6 +83,20 @@ def _severity_color(severity: str):
     return mapping.get((severity or "").lower(), "#155e75")
 
 
+def _score_hex(score) -> str:
+    if not isinstance(score, (int, float)):
+        return "#94a3b8"
+    if score >= 90:
+        return "#16A34A"
+    if score >= 70:
+        return "#4ADE80"
+    if score >= 50:
+        return "#F97316"
+    if score >= 30:
+        return "#EF4444"
+    return "#7F1D1D"
+
+
 def _paragraph(value, styles, style_name="BodyText"):
     return Paragraph(str(value or "Not available"), styles[style_name])
 
@@ -147,7 +161,7 @@ def _metric_cards(data, styles):
         ],
         [
             _paragraph("Health Score", styles, "MetricLabel"),
-            _paragraph(f"{data.get('score', 0)}/100", styles, "MetricValue"),
+            Paragraph(f'<font color="{_score_hex(data.get("score", 0))}">{data.get("score", 0)}/100</font>', styles["MetricValue"]),
             _paragraph(f"Risk: {data.get('risk', 'Unknown')}", styles, "BodyMuted"),
         ],
     ]
@@ -333,22 +347,37 @@ def generate_pdf(data, output_path="audit_report.pdf"):
             perf_rows = [[
                 _paragraph("Profile", styles, "SmallCell"),
                 _paragraph("Score", styles, "SmallCell"),
+                _paragraph("Performance", styles, "SmallCell"),
+                _paragraph("Structure", styles, "SmallCell"),
+                _paragraph("Fully Loaded", styles, "SmallCell"),
+                _paragraph("Page Size", styles, "SmallCell"),
+                _paragraph("Requests", styles, "SmallCell"),
                 _paragraph("LCP", styles, "SmallCell"),
-                _paragraph("Interactive", styles, "SmallCell"),
+                _paragraph("CLS", styles, "SmallCell"),
+                _paragraph("TTFB", styles, "SmallCell"),
+                _paragraph("TBT", styles, "SmallCell"),
                 _paragraph("Top Opportunities", styles, "SmallCell"),
             ]]
             for strategy in ("mobile", "desktop"):
                 audit = performance.get(strategy) or {}
+                score_value = audit.get("score")
                 perf_rows.append(
                     [
                         _paragraph(strategy.title(), styles, "SmallCell"),
-                        _paragraph(audit.get("score", "N/A"), styles, "SmallCell"),
+                        Paragraph(f'<font color="{_score_hex(score_value)}">{score_value if score_value is not None else "N/A"}</font>', styles["SmallCell"]),
+                        _paragraph(audit.get("performance_score", "Not detected"), styles, "SmallCell"),
+                        _paragraph(audit.get("structure_score", "Not detected"), styles, "SmallCell"),
+                        _paragraph(audit.get("fully_loaded_time", "Not detected"), styles, "SmallCell"),
+                        _paragraph(audit.get("total_page_size", "Not detected"), styles, "SmallCell"),
+                        _paragraph(str(audit.get("total_requests", "Not detected")), styles, "SmallCell"),
                         _paragraph(audit.get("largest_contentful_paint", "Not available"), styles, "SmallCell"),
+                        _paragraph(audit.get("cumulative_layout_shift", "Not available"), styles, "SmallCell"),
+                        _paragraph(audit.get("time_to_first_byte", "Not available"), styles, "SmallCell"),
                         _paragraph(audit.get("interactive", "Not available"), styles, "SmallCell"),
                         _paragraph(", ".join(audit.get("recommendations", [])) or "No major opportunity captured", styles, "SmallCell"),
                     ]
                 )
-            story.extend([_build_table(perf_rows, [24 * mm, 20 * mm, 28 * mm, 28 * mm, 80 * mm]), Spacer(1, 12)])
+            story.extend([_build_table(perf_rows, [18 * mm, 16 * mm, 18 * mm, 18 * mm, 21 * mm, 21 * mm, 16 * mm, 16 * mm, 14 * mm, 16 * mm, 14 * mm, 38 * mm]), Spacer(1, 12)])
 
     seo = data.get("seo_audit") or {}
     if seo:

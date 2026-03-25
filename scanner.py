@@ -4,6 +4,11 @@ from bs4 import BeautifulSoup
 from urllib.parse import urldefrag, urljoin, urlparse
 
 from audit_tool.fetcher import fetch_page, fetch_text_asset, probe_post_forms
+from core.collector import collect_technology_evidence
+from core.detector import detect_technology_profile
+from core.enricher import enrich_scan_technology, enrich_with_cves
+from core.scorer import calculate_audit_scores as calculate_score
+from core.scorer import risk_level
 from detectors.cms_detector import NO_CMS_MESSAGE, detect_cms_profile
 from detectors.drupal_detector import detect_drupal_modules
 from detectors.generic_component_detector import detect_generic_components
@@ -12,7 +17,6 @@ from detectors.library_detector import detect_libraries
 from detectors.leakage_detector import detect_public_leakage
 from detectors.plugin_detector import detect_wp_plugins
 from detectors.security_detector import check_security
-from detectors.stack_detector import detect_stack_signals
 from services.passive_profile import (
     analyze_cookie_headers,
     build_domain_identity_profile,
@@ -22,16 +26,9 @@ from services.passive_profile import (
 )
 from services.pagespeed_service import run_pagespeed_audit
 from services.recommendation_engine import generate_recommendations
-from services.score_engine import calculate_score, risk_level
 from services.markup_validator_service import validate_markup
 from services.seo_service import build_seo_audit
-from services.cve_service import enrich_libraries_with_cves
-from services.version_service import (
-    annotate_technology_stack,
-    detect_cms_version,
-    infer_primary_platform,
-    recommended_cms_version,
-)
+from services.external_enrichment_service import fetch_external_technology_enrichment
 
 
 def extract_assets(soup):
@@ -121,11 +118,226 @@ def _merge_named_items(*groups):
     return sorted(merged.values(), key=lambda item: item["name"].lower())
 
 
-def _fetch_library_asset_bodies(assets: list[str], limit: int = 4) -> dict:
+def _merge_stack_items(*groups):
+    merged = {}
+    for group in groups:
+        for item in group:
+            key = _canonical_key(item.get("name", ""))
+            if not key:
+                continue
+            existing = merged.get(key)
+            if not existing:
+                merged[key] = dict(item)
+                continue
+            if item.get("confidence_score", 0) > existing.get("confidence_score", 0):
+                merged[key] = dict(item)
+                continue
+            if item.get("evidence") and item["evidence"] not in str(existing.get("evidence", "")):
+                existing["evidence"] = ", ".join(filter(None, [existing.get("evidence"), item.get("evidence")]))
+    return sorted(merged.values(), key=lambda item: (-item.get("confidence_score", 0), item.get("name", "").lower()))
+
+
+def _stack_items_from_tech_detection(technology_detection: dict) -> list[dict]:
+    items = []
+    category_map = {
+        "Blogs": "CMS",
+        "Framework": "Frontend",
+        "Frontend": "Frontend",
+        "JavaScript Library": "JavaScript Library",
+        "Analytics": "Analytics",
+        "Marketing": "Marketing",
+        "Tag Manager": "Tag Manager",
+        "Hosting": "Hosting",
+        "Infrastructure": "Hosting",
+        "CDN": "CDN",
+        "Proxy": "Proxy",
+        "Runtime": "Runtime",
+        "Commerce": "Commerce",
+        "Headless CMS": "CMS",
+        "CMS": "CMS",
+    }
+    for item in technology_detection.get("technologies", []):
+        category = next((category_map.get(category) for category in item.get("categories", []) if category_map.get(category)), "Technology")
+        items.append(
+            {
+                "category": category,
+                "name": item["name"],
+                "confidence": item.get("confidence", "Low"),
+                "confidence_score": round((item.get("confidence_score", 0) or 0) * 10, 1),
+                "confidence_score_10": item.get("confidence_score", 0),
+                "evidence": ", ".join(item.get("signals", [])[:3]) or "Pattern-based technology match",
+                "detected_version": item.get("detected_version", "Not publicly exposed"),
+                "source": "public",
+            }
+        )
+    return items
+
+
+def _cms_profile_from_technology_detection(technology_detection: dict) -> dict:
+    technologies = technology_detection.get("technologies", [])
+    cms_candidates = [item for item in technologies if item.get("category") in {"CMS", "Commerce", "Headless CMS"}]
+    if not cms_candidates:
+        return {"primary": None, "secondary": [], "matches": [], "summary": NO_CMS_MESSAGE}
+
+    matches = []
+    for index, item in enumerate(cms_candidates[:3]):
+        matches.append(
+            {
+                "name": item["name"],
+                "family": item.get("category", "Technology"),
+                "role": "Primary" if index == 0 else "Secondary",
+                "confidence": item.get("confidence", "Low"),
+                "signals": item.get("signals", [])[:5],
+                "source": "public",
+            }
+        )
+    primary = matches[0]
+    summary = "; ".join(
+        f"{item['name']} ({item['role'].lower()}, {item['family'].lower()}, {str(item['confidence']).lower()} confidence)"
+        for item in matches
+    )
+    return {"primary": primary, "secondary": matches[1:], "matches": matches, "summary": summary}
+
+
+def _canonical_key(value: str) -> str:
+    return "".join(character for character in (value or "").lower() if character.isalnum())
+
+
+def _merge_external_named_items(local_items, external_items, kind: str):
+    merged = {}
+    for item in local_items:
+        enriched = dict(item)
+        enriched.setdefault("confidence", "High")
+        enriched.setdefault("evidence", "Public evidence from scanned pages and assets.")
+        enriched.setdefault("source", "public")
+        merged[_canonical_key(enriched.get("name", ""))] = enriched
+
+    for item in external_items:
+        key = _canonical_key(item.get("name", ""))
+        if not key:
+            continue
+        existing = merged.get(key)
+        if existing:
+            if existing.get("detected_version") in {None, "", "Not publicly exposed"} and item.get("detected_version") not in {None, "", "Not publicly exposed"}:
+                existing["detected_version"] = item["detected_version"]
+            existing["source"] = "merged"
+            existing["confidence"] = existing.get("confidence") or item.get("confidence", "Medium")
+            if item.get("evidence"):
+                existing["evidence"] = (
+                    existing.get("evidence", "Public evidence from scanned pages and assets.")
+                    + f" Refined with {item['evidence'].lower()}."
+                )
+            continue
+
+        external_copy = dict(item)
+        external_copy["confidence"] = item.get("confidence", "Low")
+        external_copy["source"] = "external"
+        external_copy["evidence"] = item.get("evidence", f"External enrichment for {kind}.")
+        merged[key] = external_copy
+
+    return sorted(merged.values(), key=lambda item: item["name"].lower())
+
+
+def _evidence_list(value) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
+def _build_profile_snapshot(platform_name: str, cms_profile: dict, technology_stack: list[dict], plugins: list[dict], modules: list[dict], libraries: list[dict]) -> dict:
+    primary_match = cms_profile.get("primary") or {}
+    secondary_matches = cms_profile.get("secondary") or []
+    confidence = primary_match.get("confidence")
+    if not confidence:
+        stack_confidence_scores = {"High": 3, "Medium": 2, "Low": 1}
+        top_stack = sorted(
+            technology_stack,
+            key=lambda item: (-item.get("confidence_score", 0), -stack_confidence_scores.get(item.get("confidence", "Low"), 1)),
+        )
+        confidence = top_stack[0].get("confidence") if top_stack else "Low"
+
+    primary_evidence = []
+    primary_evidence.extend(_evidence_list(primary_match.get("signals")))
+    primary_evidence.extend(
+        item.get("evidence", "")
+        for item in technology_stack
+        if item.get("name") == platform_name and item.get("evidence")
+    )
+    primary_evidence = list(dict.fromkeys(filter(None, primary_evidence)))[:5]
+
+    component_items = plugins if platform_name == "WordPress" else modules
+    component_names = {item.get("name") for item in component_items}
+    library_names = {item.get("name") for item in libraries}
+    secondary_names = {item.get("name") for item in secondary_matches}
+    supporting_stack = [
+        item for item in technology_stack
+        if item.get("name") != platform_name
+        and item.get("name") not in component_names
+        and item.get("name") not in library_names
+        and item.get("name") not in secondary_names
+        and item.get("category") not in {"CMS", "Blogs", "JavaScript Library", "Database"}
+    ]
+    supporting_stack = sorted(
+        supporting_stack,
+        key=lambda item: (-item.get("confidence_score", 0), item.get("name", "").lower()),
+    )[:8]
+
+    component_confident = [item for item in component_items if item.get("source") != "external" or item.get("detected_version") != "Not publicly exposed"]
+    library_confident = [item for item in libraries if item.get("source") != "external" or item.get("detected_version") != "Not publicly exposed"]
+
+    return {
+        "primary_platform": platform_name,
+        "primary_confidence": confidence or "Low",
+        "primary_evidence": primary_evidence,
+        "secondary_platforms": secondary_matches[:4],
+        "supporting_stack": supporting_stack,
+        "component_count": len(component_confident),
+        "library_count": len(library_confident),
+        "component_source_summary": {
+            "public": sum(1 for item in component_items if item.get("source") == "public"),
+            "merged": sum(1 for item in component_items if item.get("source") == "merged"),
+            "external": sum(1 for item in component_items if item.get("source") == "external"),
+        },
+        "library_source_summary": {
+            "public": sum(1 for item in libraries if item.get("source") == "public"),
+            "merged": sum(1 for item in libraries if item.get("source") == "merged"),
+            "external": sum(1 for item in libraries if item.get("source") == "external"),
+        },
+    }
+
+
+def _fetch_library_asset_bodies(assets: list[str], limit: int = 14) -> dict:
     bodies = {}
+    library_tokens = (
+        "jquery",
+        "bootstrap",
+        "swiper",
+        "lazysizes",
+        "core-js",
+        "aos",
+        "underscore",
+        "clipboard",
+        "owl",
+        "carousel",
+        "a11y",
+        "vendor",
+        "bundle",
+        "chunk",
+        "slider",
+        "lazy",
+        "gallery",
+        "animation",
+        "core",
+        "ui",
+    )
     for asset in assets:
         lowered = asset.lower()
-        if not any(token in lowered for token in ("jquery", "bootstrap")):
+        is_text_asset = lowered.endswith((".js", ".css")) or ".js?" in lowered or ".css?" in lowered
+        if not is_text_asset:
+            continue
+        if not any(token in lowered for token in library_tokens) and len(bodies) >= max(6, limit // 2):
             continue
         if len(bodies) >= limit:
             break
@@ -291,6 +503,7 @@ def build_error_result(url: str, message: str):
         "plugins": [],
         "modules": [],
         "libraries": [],
+        "technology_detection": {"technologies": [], "by_name": {}, "endpoint_probes": {}},
         "technology_stack": [],
         "technology_profile": [],
         "security": [],
@@ -312,11 +525,12 @@ def build_error_result(url: str, message: str):
         "performance_audit": {"mobile": None, "desktop": None, "error": None},
         "seo_audit": {"issues": []},
         "website_details": {},
+        "technology_snapshot": {},
         "platform_label": "Platform Assessment",
         "component_label": "Modules / Extensions",
         "score": 0,
         "score_breakdown": [{"label": "Target fetch failed", "impact": -100}],
-        "category_scores": {},
+        "category_scores": {"technology_health": 0, "security": 0, "performance": 0, "seo": 0},
         "score_model": {},
         "risk": "High",
         "score_label": "Critical",
@@ -369,8 +583,38 @@ def run_scan(url, deep_scan: bool = False):
                 combined_header_lines[key] = value
             elif value not in str(existing):
                 combined_header_lines[key] = f"{existing} | {value}"
+    evidence = collect_technology_evidence(
+        url=final_url,
+        html=combined_html,
+        headers=combined_header_lines,
+        assets=combined_assets,
+        cookies=combined_cookies,
+        set_cookie_headers=combined_set_cookie_headers,
+        meta_generator=primary_generator,
+        probe_endpoints=True,
+    )
+    endpoint_probes = evidence.endpoint_results
+    evidence.endpoint_results = endpoint_probes
+    technology_detection = detect_technology_profile(evidence)
+    external_enrichment = fetch_external_technology_enrichment(final_url)
 
-    cms_profile = detect_cms_profile(combined_html, combined_header_lines, primary_generator, combined_assets)
+    cms_profile = _cms_profile_from_technology_detection(technology_detection)
+    legacy_cms_profile = detect_cms_profile(combined_html, combined_header_lines, primary_generator, combined_assets)
+    if not cms_profile["matches"]:
+        cms_profile = legacy_cms_profile
+    if not cms_profile["matches"] and external_enrichment.get("cms"):
+        for item in external_enrichment["cms"][:2]:
+            cms_profile["matches"].append(
+                {
+                    "name": item["name"],
+                    "family": "Externally enriched CMS hint",
+                    "role": "Secondary",
+                    "confidence": item.get("confidence", "Low"),
+                    "signals": [item.get("evidence", "External enrichment from technologychecker.io")],
+                    "source": "external",
+                }
+            )
+        cms_profile["summary"] = "Local scan did not confirm a CMS; external enrichment added low-confidence platform hints."
     cms = cms_profile["primary"]["name"] if cms_profile["primary"] else NO_CMS_MESSAGE
 
     plugins = detect_wp_plugins(combined_html, combined_header_lines, combined_assets) if cms == "WordPress" else []
@@ -381,17 +625,25 @@ def run_scan(url, deep_scan: bool = False):
     else:
         modules = []
     asset_bodies = _fetch_library_asset_bodies(combined_assets)
-    libraries = detect_libraries(combined_assets, asset_bodies)
-    libraries = enrich_libraries_with_cves(libraries)
-    technology_stack = detect_stack_signals(combined_html, combined_header_lines, combined_assets, combined_cookies, primary_generator)
-    platform_name = infer_primary_platform(cms, technology_stack)
-    version = detect_cms_version(combined_html, combined_header_lines, combined_assets, primary_generator, platform_name)
-    technology_stack = annotate_technology_stack(
-        technology_stack,
-        platform_name,
-        version,
-        libraries,
-    )
+    libraries = detect_libraries(combined_assets, asset_bodies, combined_html)
+    libraries = enrich_with_cves(libraries)
+    technology_stack = _merge_stack_items(_stack_items_from_tech_detection(technology_detection))
+    enrichment_seed = {
+        "cms": cms,
+        "technology_stack": technology_stack,
+        "libraries": libraries,
+        "plugins": plugins,
+        "modules": modules,
+        "combined_html": combined_html,
+        "combined_headers": combined_header_lines,
+        "combined_assets": combined_assets,
+        "meta_generator": primary_generator,
+    }
+    enriched_technology = enrich_scan_technology(enrichment_seed)
+    platform_name = enriched_technology["platform_name"]
+    version = enriched_technology["version"]
+    libraries = enriched_technology["libraries"]
+    technology_stack = enriched_technology["technology_stack"]
     technology_profile = group_stack_signals(technology_stack)
     security = check_security(headers)
     infra = detect_infrastructure(headers)
@@ -406,8 +658,10 @@ def run_scan(url, deep_scan: bool = False):
     seo_support_files = _fetch_seo_support_files(final_url)
     seo_audit = build_seo_audit(html, all_pages, markup_validation, final_url=final_url, support_files=seo_support_files)
     form_inventory = _inventory_forms(all_pages, deep_scan)
-    plugins = _merge_named_items(plugins)
-    modules = _merge_named_items(modules)
+    plugins = _merge_external_named_items(_merge_named_items(plugins), external_enrichment.get("plugins", []), "plugins")
+    modules = _merge_external_named_items(_merge_named_items(modules), external_enrichment.get("frameworks", []), "frameworks")
+    libraries = _merge_external_named_items(libraries, external_enrichment.get("libraries", []), "libraries")
+    technology_snapshot = _build_profile_snapshot(platform_name, cms_profile, technology_stack, plugins, modules, libraries)
     crawl_errors = [page for page in crawled_pages if page.get("error")]
     sampled_urls = [page["final_url"] for page in all_pages[:10]]
     pages_scanned = len(all_pages)
@@ -440,8 +694,10 @@ def run_scan(url, deep_scan: bool = False):
         "resolved_hostname": urlparse(final_url).hostname or "Not resolved",
         "platform": platform_name,
         "cms_summary": cms_profile["summary"],
+        "platform_confidence": technology_snapshot["primary_confidence"],
         "version": version,
-        "recommended_track": recommended_cms_version(platform_name),
+        "recommended_track": enriched_technology["recommended_version"],
+        "recommended_track_source": enriched_technology["recommended_source"],
         "server": headers.get("Server", "Not exposed"),
         "meta_generator": primary_generator or "Not exposed",
         "deep_scan": "Enabled" if deep_scan else "Off",
@@ -452,6 +708,7 @@ def run_scan(url, deep_scan: bool = False):
         "cookies_observed": len(combined_cookies),
         "forms_reviewed": len(form_inventory),
         "forms_discovered": len(form_inventory),
+        "primary_evidence": technology_snapshot["primary_evidence"],
     }
 
     scan = {
@@ -465,13 +722,16 @@ def run_scan(url, deep_scan: bool = False):
         "primary_cms": cms_profile["primary"],
         "secondary_cms": cms_profile["secondary"],
         "version": version,
-        "recommended_cms_version": recommended_cms_version(platform_name),
+        "recommended_cms_version": enriched_technology["recommended_version"],
+        "recommended_cms_source": enriched_technology["recommended_source"],
         "fetch_warning": fetch_warning,
         "plugins": plugins,
         "modules": modules,
         "libraries": libraries,
+        "technology_detection": technology_detection,
         "technology_stack": technology_stack,
         "technology_profile": technology_profile,
+        "technology_snapshot": technology_snapshot,
         "security": security,
         "infra": infra,
         "transport": transport,
@@ -483,11 +743,13 @@ def run_scan(url, deep_scan: bool = False):
         "performance_audit": performance_audit,
         "seo_audit": seo_audit,
         "website_details": website_details,
+        "technology_snapshot": technology_snapshot,
         "meta_generator": primary_generator,
         "cookies": combined_cookies,
         "crawl_summary": crawl_summary,
         "platform_label": platform_label,
         "component_label": component_label,
+        "external_enrichment": external_enrichment,
         "error": None,
     }
     scan["score"], scan["score_breakdown"], scan["category_scores"], scan["score_model"] = calculate_score(scan)
