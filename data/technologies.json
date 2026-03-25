@@ -1,0 +1,219 @@
+{
+  "technologies": [
+    {
+      "name": "WordPress",
+      "categories": ["CMS", "Blogs"],
+      "confidence_threshold": 5.0,
+      "signals": {
+        "html": ["(?:/wp-content/|/wp-includes/|wp-embed\\.min\\.js)", "wp-json"],
+        "meta": ["WordPress(?:\\s+(\\d+(?:\\.\\d+){0,2}))?;version:\\1"],
+        "endpoint": {
+          "/wp-json": ["wp/v2", "wordpress"],
+          "/robots.txt": ["wp-admin", "wp-content"],
+          "/feed": ["wordpress\\.org"]
+        }
+      }
+    },
+    {
+      "name": "Drupal",
+      "categories": ["CMS"],
+      "confidence_threshold": 5.0,
+      "signals": {
+        "headers": {
+          "X-Generator": ["Drupal(?:\\s+(\\d+(?:\\.\\d+){0,2}))?;version:\\1"],
+          "X-Drupal-Cache": [".+"],
+          "X-Drupal-Dynamic-Cache": [".+"],
+          "X-Drupal-Cache-Tags": [".+"]
+        },
+        "html": ["drupalSettings", "/sites/default/files", "/sites/all/", "/core/misc/drupal"],
+        "endpoint": {
+          "/robots.txt": ["/core/", "/sites/default/"],
+          "/user/login": ["drupal", "user/login"],
+          "/sitemap.xml": ["<urlset", "/node/"]
+        }
+      }
+    },
+    {
+      "name": "Joomla",
+      "categories": ["CMS"],
+      "confidence_threshold": 4.5,
+      "signals": {
+        "meta": ["Joomla!?\\s*(?:CMS)?\\s*(\\d+(?:\\.\\d+){0,2})?;version:\\1"],
+        "html": ["/media/system/js", "/templates/system/", "option=com_"],
+        "endpoint": {
+          "/administrator": ["joomla", "mod-login-username"],
+          "/robots.txt": ["/administrator/"]
+        }
+      }
+    },
+    {
+      "name": "Magento",
+      "categories": ["Commerce"],
+      "confidence_threshold": 4.5,
+      "signals": {
+        "html": ["/static/frontend/", "mage/cookies", "Magento_Ui/js"],
+        "headers": {
+          "X-Magento-Cache-Debug": [".+"]
+        }
+      }
+    },
+    {
+      "name": "Shopify",
+      "categories": ["Commerce"],
+      "confidence_threshold": 4.5,
+      "signals": {
+        "headers": {
+          "X-Shopify-Stage": [".+"],
+          "X-Shopify-Request-Id": [".+"]
+        },
+        "html": ["cdn\\.shopify\\.com", "Shopify\\.theme", "shopify-section"],
+        "cookies": ["_shopify_"]
+      }
+    },
+    {
+      "name": "Contentful",
+      "categories": ["Headless CMS"],
+      "confidence_threshold": 4.0,
+      "signals": {
+        "html": ["cdn\\.contentful\\.com", "images\\.ctfassets\\.net", "contentful"],
+        "headers": {
+          "X-Contentful-Request-Id": [".+"]
+        }
+      }
+    },
+    {
+      "name": "Strapi",
+      "categories": ["Headless CMS"],
+      "confidence_threshold": 4.0,
+      "signals": {
+        "headers": {
+          "X-Powered-By": ["strapi"]
+        },
+        "html": ["strapi", "/uploads/"]
+      }
+    },
+    {
+      "name": "Sanity",
+      "categories": ["Headless CMS"],
+      "confidence_threshold": 4.0,
+      "signals": {
+        "html": ["cdn\\.sanity\\.io", "sanity\\.io/images", "sanity/studio"],
+        "headers": {
+          "X-Sanity-Project-Id": [".+"]
+        }
+      }
+    },
+    {
+      "name": "React",
+      "categories": ["Framework", "Frontend"],
+      "confidence_threshold": 4.0,
+      "signals": {
+        "html": ["data-reactroot", "__REACT_DEVTOOLS_GLOBAL_HOOK__"],
+        "script": ["react(?:\\.production)?(?:\\.min)?[-.]?(\\d+\\.\\d+(?:\\.\\d+)?)?\\.js;version:\\1"],
+        "js": ["React", "__REACT_DEVTOOLS_GLOBAL_HOOK__"]
+      }
+    },
+    {
+      "name": "Next.js",
+      "categories": ["Framework", "Frontend"],
+      "confidence_threshold": 4.0,
+      "signals": {
+        "html": ["__NEXT_DATA__", "id=[\"']__next[\"']"],
+        "script": ["_next/static/", "next(?:@|[-.])(\\d+\\.\\d+(?:\\.\\d+)?)?;version:\\1"]
+      }
+    },
+    {
+      "name": "Vue.js",
+      "categories": ["Framework", "Frontend"],
+      "confidence_threshold": 4.0,
+      "signals": {
+        "html": ["data-v-[a-f0-9]+", "__vue__"],
+        "script": ["vue(?:\\.runtime)?(?:\\.global)?(?:\\.prod)?[-.]?(\\d+\\.\\d+(?:\\.\\d+)?)?\\.js;version:\\1"],
+        "js": ["Vue"]
+      }
+    },
+    {
+      "name": "Angular",
+      "categories": ["Framework", "Frontend"],
+      "confidence_threshold": 4.0,
+      "signals": {
+        "html": ["ng-version=[\"'](\\d+(?:\\.\\d+){0,2})[\"'];version:\\1", "_ngcontent-", "ng-app"],
+        "js": ["ng", "Zone"]
+      }
+    },
+    {
+      "name": "Cloudflare",
+      "categories": ["CDN", "Infrastructure"],
+      "confidence_threshold": 4.0,
+      "signals": {
+        "headers": {
+          "CF-Cache-Status": [".+"],
+          "Server": ["cloudflare"],
+          "CF-Ray": [".+"]
+        },
+        "cookies": ["__cf_bm", "cf_clearance"]
+      }
+    },
+    {
+      "name": "Fastly",
+      "categories": ["CDN", "Infrastructure"],
+      "confidence_threshold": 4.0,
+      "signals": {
+        "headers": {
+          "X-Served-By": ["cache-[a-z0-9-]+", "fastly"],
+          "Via": ["fastly"]
+        }
+      }
+    },
+    {
+      "name": "Akamai",
+      "categories": ["CDN", "Infrastructure"],
+      "confidence_threshold": 4.0,
+      "signals": {
+        "headers": {
+          "Server": ["akamai"],
+          "X-Akamai-Transformed": [".+"]
+        },
+        "cookies": ["AKA_A2", "ak_bmsc"]
+      }
+    },
+    {
+      "name": "Google Analytics",
+      "categories": ["Analytics"],
+      "confidence_threshold": 3.5,
+      "signals": {
+        "script": ["google-analytics\\.com/(?:ga|urchin|analytics)\\.js", "gtag/js\\?id=G-[A-Z0-9]+"],
+        "html": ["GoogleAnalyticsObject", "gtag\\("],
+        "cookies": ["_ga", "_gid"]
+      }
+    },
+    {
+      "name": "Google Tag Manager",
+      "categories": ["Tag Manager"],
+      "confidence_threshold": 3.5,
+      "signals": {
+        "script": ["googletagmanager\\.com/gtm\\.js"],
+        "html": ["GTM-[A-Z0-9]+"]
+      }
+    },
+    {
+      "name": "jQuery",
+      "categories": ["JavaScript Library"],
+      "confidence_threshold": 3.0,
+      "signals": {
+        "script": ["jquery(?:-|\\.)(\\d+(?:\\.\\d+)+)[^/]*\\.js;version:\\1", "jquery.*\\.js"],
+        "js": ["jQuery", "\\$"]
+      }
+    },
+    {
+      "name": "Bootstrap",
+      "categories": ["JavaScript Library"],
+      "confidence_threshold": 3.0,
+      "signals": {
+        "script": ["bootstrap(?:\\.bundle)?(?:[-.](\\d+(?:\\.\\d+)+))?(?:\\.min)?\\.(?:js|css);version:\\1"],
+        "html": ["class=[\"'][^\"']*\\bcontainer(?:-fluid)?\\b", "class=[\"'][^\"']*\\brow\\b"]
+      }
+    }
+  ]
+}
+

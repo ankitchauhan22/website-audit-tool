@@ -8,11 +8,17 @@ GENERIC_COMPONENT_PATTERNS = [
     re.compile(r"/plugins/([^/?\"'#]+)/", re.IGNORECASE),
     re.compile(r"/addons/([^/?\"'#]+)/", re.IGNORECASE),
     re.compile(r"/bundles/([^/?\"'#]+)/", re.IGNORECASE),
+    re.compile(r"/(?:vendor|packages|libs)/([^/?\"'#]+)/", re.IGNORECASE),
+    re.compile(r"(?:data-module|data-component|data-plugin)=[\"']([^\"']+)[\"']", re.IGNORECASE),
 ]
 
 GENERIC_COMPONENT_VERSION_PATTERNS = [
     re.compile(
-        r"/(?:modules|extensions|components|plugins|addons|bundles)/([^/?\"'#]+)/[^\"'#?]*[?&](?:ver|version|v)=((?:\d+\.){1,3}\d+)",
+        r"/(?:modules|extensions|components|plugins|addons|bundles|vendor|packages|libs)/([^/?\"'#]+)/[^\"'#?]*[?&](?:ver|version|v)=((?:\d+\.){1,3}\d+)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"/(?:modules|extensions|components|plugins|addons|bundles|vendor|packages|libs)/([^/?\"'#]+)/[^\"'#?]*[-.]((?:\d+\.){1,3}\d+)\.(?:js|css)",
         re.IGNORECASE,
     ),
 ]

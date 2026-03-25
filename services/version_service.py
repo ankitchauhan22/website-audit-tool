@@ -7,42 +7,24 @@ import requests
 
 
 OFFICIAL_RELEASE_TRACKS = {
-    "WordPress": "6.9.4",
-    "Drupal": "11.3.3 current; 10.6.3 supported for Drupal 10 sites",
-    "Joomla": "6.0.x current; 5.4.x supported for Joomla 5 sites",
-    "Magento": "2.4.8",
-    "Shopify": "Managed SaaS",
-    "Ghost": "6.x",
-    "TYPO3": "13.4 LTS",
-    "Craft CMS": "5.x current; 4.x still seen on maintained installs",
-    "ButterCMS": "Managed SaaS",
-    "Sitefinity": "Vendor-managed / not reliably exposed publicly",
+    "WordPress": "Live official source",
+    "Shopify": "Vendor-managed SaaS",
+    "ButterCMS": "Vendor-managed SaaS",
+    "Wix": "Vendor-managed SaaS",
+    "Squarespace": "Vendor-managed SaaS",
+    "Webflow": "Vendor-managed SaaS",
+    "Sitefinity": "Vendor-managed enterprise platform",
     "SharePoint": "Microsoft-managed / tenant-specific",
-    "CivicPlus Web Central": "Vendor-managed / not reliably exposed publicly",
-    "CivicPlus HCMS": "Vendor-managed / not reliably exposed publicly",
-    "CivicLive": "Vendor-managed / not reliably exposed publicly",
-    "ProdCity": "Vendor-managed / not reliably exposed publicly",
-    "TerminalFour": "Vendor-managed / not reliably exposed publicly",
-    "Granicus govAccess": "Vendor-managed / not reliably exposed publicly",
-    "OpenCities": "Vendor-managed / not reliably exposed publicly",
-    "CakePHP": "5.x current; 4.x commonly maintained",
+    "CivicPlus Web Central": "Vendor-managed platform",
+    "CivicPlus HCMS": "Vendor-managed platform",
+    "CivicLive": "Vendor-managed platform",
+    "ProdCity": "Vendor-managed platform",
+    "TerminalFour": "Vendor-managed platform",
+    "Granicus govAccess": "Vendor-managed platform",
+    "OpenCities": "Vendor-managed platform",
     "Zend Framework": "Deprecated; migrate to Laminas",
-    "Laravel": "12.x",
-    "Next.js": "16.0.10 current; 15.5.9 latest 15.x patch",
-    "Nuxt": "4.2.x current; 3.18.x maintained",
-    "Vue.js": "3.5.x",
-    "Angular": "21.x",
-    "AngularJS": "Deprecated",
-    "React": "19.2",
-    "Astro": "5.5.x",
-    "Gatsby": "5.16.x",
-    "Docusaurus": "3.9.x",
-    "Svelte": "5.x",
-    "SvelteKit": "2.x",
+    "AngularJS": "Deprecated; migration required",
     "Sapper": "Deprecated; migrate to SvelteKit",
-    "Wix": "Managed SaaS",
-    "Squarespace": "Managed SaaS",
-    "Webflow": "Managed SaaS",
 }
 
 OFFICIAL_RELEASE_SOURCES = {
@@ -286,7 +268,7 @@ def _get_wordpress_release_data() -> dict:
         pass
 
     fallback = {
-        "current": OFFICIAL_RELEASE_TRACKS["WordPress"],
+        "current": SUPPORTED_RELEASE_LINES["WordPress"]["6"],
         "release_lines": SUPPORTED_RELEASE_LINES["WordPress"],
     }
     _wordpress_release_cache["data"] = fallback
@@ -301,6 +283,22 @@ def _best_version_match(matches: list[str]) -> str:
         key=lambda value: (value.count("."), len(value)),
         reverse=True,
     )[0]
+
+
+def _is_plausible_public_version(platform: str, version: str) -> bool:
+    """Reject obviously wrong cache-buster or timestamp values before showing them to users."""
+    candidate = (version or "").strip()
+    if not candidate:
+        return False
+    if len(candidate) > 24:
+        return False
+    if candidate.isdigit():
+        return len(candidate) <= 3
+    if len(re.findall(r"\d+", candidate)) > 4:
+        return False
+    if not re.match(r"^\d+(?:\.\d+){0,3}(?:[-._+a-zA-Z0-9]+)?$", candidate):
+        return False
+    return True
 
 
 def _version_key(version: str) -> tuple[int, ...]:
@@ -357,7 +355,8 @@ def detect_cms_version(
             matches.append(match.group(1))
 
     if matches:
-        return _best_version_match(matches)
+        version = _best_version_match(matches)
+        return version if _is_plausible_public_version(platform, version) else "Not publicly exposed"
 
     return "Not publicly exposed"
 
@@ -379,7 +378,18 @@ def recommended_cms_version(platform: str) -> str:
     """Return the current recommended release track from official project sources."""
     if platform == "WordPress":
         return _get_wordpress_release_data()["current"]
+    if platform in MANAGED_PLATFORMS:
+        return OFFICIAL_RELEASE_TRACKS.get(platform, "Vendor-managed platform")
+    if platform in DEPRECATED_TECHNOLOGIES:
+        return OFFICIAL_RELEASE_TRACKS.get(platform, "Deprecated; migration required")
+    if platform in OFFICIAL_RELEASE_SOURCES:
+        return "Check official release source"
     return OFFICIAL_RELEASE_TRACKS.get(platform, "No CMS release track inferred")
+
+
+def recommended_cms_source(platform: str) -> str:
+    """Return the official or vendor source used for release guidance when available."""
+    return OFFICIAL_RELEASE_SOURCES.get(platform, "")
 
 
 def assess_technology(name: str, detected_version: str) -> dict:
@@ -408,11 +418,7 @@ def assess_technology(name: str, detected_version: str) -> dict:
             "recommended_track": recommended_cms_version(name),
         }
 
-    supported_lines = (
-        _get_wordpress_release_data()["release_lines"]
-        if name == "WordPress"
-        else SUPPORTED_RELEASE_LINES.get(name)
-    )
+    supported_lines = _get_wordpress_release_data()["release_lines"] if name == "WordPress" else None
     if not supported_lines:
         return {
             "status": "Observed",

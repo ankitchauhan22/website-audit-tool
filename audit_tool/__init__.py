@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from flask import Flask
+from flask import Flask, jsonify
 
 
 SECURITY_HEADERS = {
@@ -37,6 +37,12 @@ def create_app() -> Flask:
     from .views import main_bp
 
     app.register_blueprint(main_bp)
+
+    @app.errorhandler(Exception)
+    def handle_unexpected_error(error):
+        """Return JSON for API failures so the frontend never receives an HTML error page for scan routes."""
+        message = str(error) or "Unexpected server error"
+        return jsonify({"error": message}), 500
 
     @app.after_request
     def apply_security_headers(response):

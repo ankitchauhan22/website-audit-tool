@@ -17,7 +17,7 @@ function escapeHtml(value) {
         .replaceAll("'", "&#39;");
 }
 
-function renderTable(headers, rows) {
+function renderTable(headers, rows, tableClass = "") {
     if (!rows.length) {
         return '<p class="muted">No data available for this section.</p>';
     }
@@ -29,7 +29,7 @@ function renderTable(headers, rows) {
 
     return `
         <div class="table-wrap">
-            <table>
+            <table class="${escapeHtml(tableClass)}">
                 <thead><tr>${head}</tr></thead>
                 <tbody>${body}</tbody>
             </table>
@@ -43,6 +43,18 @@ function renderEmptyState(title, detail) {
             <strong>${escapeHtml(title)}</strong>
             <p>${escapeHtml(detail)}</p>
         </div>
+    `;
+}
+
+function renderEntityIdentity(name, kind = "tech") {
+    const label = String(name || "Unknown").trim() || "Unknown";
+    const words = label.split(/\s+/).filter(Boolean);
+    const initials = words.slice(0, 2).map((part) => part[0]).join("").slice(0, 2).toUpperCase() || "T";
+    return `
+        <span class="entity-identity entity-${escapeHtml(kind)}">
+            <span class="entity-icon" aria-hidden="true">${escapeHtml(initials)}</span>
+            <span>${escapeHtml(label)}</span>
+        </span>
     `;
 }
 
@@ -163,23 +175,43 @@ function renderScoreMeter(score, label = "") {
     `;
 }
 
-function renderPerformanceBreakdown(profileName, audit) {
-    const factors = Array.isArray(audit?.benchmark_breakdown) ? audit.benchmark_breakdown : [];
-    if (!factors.length) {
-        return renderEmptyState(
-            `No ${profileName} benchmark detail captured`,
-            "This performance profile did not return enough metric detail to explain the benchmark scoring."
-        );
-    }
+function renderPerformanceInsightTables(performance) {
+    const opportunityRows = ["desktop", "mobile"].flatMap((strategy) => {
+        const opportunities = Array.isArray(performance?.[strategy]?.opportunities) ? performance[strategy].opportunities : [];
+        return opportunities.map((item) => [
+            escapeHtml(strategy[0].toUpperCase() + strategy.slice(1)),
+            escapeHtml(item.label || "Opportunity"),
+            statusPill(item.impact || "Medium", signalTone(item.impact || "review")),
+            escapeHtml(item.detail || "Review this metric in the provider report."),
+        ]);
+    });
 
-    const rows = factors.map((item) => [
-        escapeHtml(item.name || "Factor"),
-        escapeHtml(item.observed || "Not available"),
-        escapeHtml(item.benchmark || "Not captured"),
-        escapeHtml(`${item.achieved ?? 0}/${item.points ?? 0}`),
-    ]);
+    const diagnosticRows = ["desktop", "mobile"].flatMap((strategy) => {
+        const diagnostics = Array.isArray(performance?.[strategy]?.diagnostics) ? performance[strategy].diagnostics : [];
+        return diagnostics.map((item) => [
+            escapeHtml(strategy[0].toUpperCase() + strategy.slice(1)),
+            escapeHtml(item.label || "Diagnostic"),
+            escapeHtml(item.value || "Not detected"),
+            escapeHtml(item.detail || "Reported by the performance provider."),
+        ]);
+    });
 
-    return renderTable(["Factor", "Observed", "Benchmark", "Points"], rows);
+    return `
+        <div class="two-col-grid">
+            <article class="card">
+                <h3>Top Opportunities</h3>
+                ${opportunityRows.length
+                    ? renderTable(["Profile", "Opportunity", "Impact", "Detail"], opportunityRows)
+                    : renderEmptyState("No major opportunity captured", "The performance provider did not return a high-confidence optimization item for this scan.")}
+            </article>
+            <article class="card">
+                <h3>Diagnostics</h3>
+                ${diagnosticRows.length
+                    ? renderTable(["Profile", "Diagnostic", "Observed", "Detail"], diagnosticRows)
+                    : renderEmptyState("No diagnostics captured", "The performance provider did not return a diagnostic payload for this scan.")}
+            </article>
+        </div>
+    `;
 }
 
 function renderTechnologySections(sections) {
@@ -233,6 +265,103 @@ function signalTone(value) {
     return "info";
 }
 
+function renderTabButton(id, label, active = false) {
+    return `<button type="button" class="report-tab${active ? " is-active" : ""}" data-report-tab="${escapeHtml(id)}">${escapeHtml(label)}</button>`;
+}
+
+function displayVersion(value) {
+    const candidate = String(value || "").trim();
+    if (!candidate || candidate === "Not publicly exposed" || candidate === "No CMS release track inferred") {
+        return "N/A";
+    }
+    if (/^\d{4,}$/.test(candidate)) {
+        return "N/A";
+    }
+    return candidate;
+}
+
+function renderTabScoreCard(label, score, note = "") {
+    const numeric = typeof score === "number" ? score : null;
+    return `
+        <article class="card tab-score-card" style="--score-accent:${scoreColor(numeric)}; --score-accent-soft:${scoreSoftColor(numeric)};">
+            <span class="metric-label">${escapeHtml(label)}</span>
+            <strong>${escapeHtml(numeric != null ? `${numeric}/100` : "N/A")}</strong>
+            ${renderScoreMeter(numeric)}
+            ${note ? `<small>${escapeHtml(note)}</small>` : ""}
+        </article>
+    `;
+}
+
+function renderCompositeTechnologyScore(result, categoryScores, scoreModel) {
+    const overall = typeof result.score === "number" ? result.score : null;
+    const technologyHealth = typeof categoryScores.technology_health === "number" ? categoryScores.technology_health : null;
+    const benchmark = result.score_label || scoreModel?.benchmark_label || result.risk || "";
+    return `
+        <article class="card metric-card metric-card-score tab-score-card" style="--score-accent:${scoreColor(overall)}; --score-accent-soft:${scoreSoftColor(overall)};">
+            <span class="metric-label">Website Score</span>
+            <strong>${escapeHtml(overall != null ? `${overall}/100` : "N/A")}</strong>
+            ${renderScoreMeter(overall)}
+            <small>${escapeHtml(benchmark)}${technologyHealth != null ? ` · Technology Health ${technologyHealth}/100` : ""}</small>
+        </article>
+    `;
+}
+
+function computeInfrastructureScore(result) {
+    const transport = result.transport || [];
+    const domain = result.domain_identity || [];
+    const infra = result.infra || [];
+    let achieved = 0;
+    let points = 0;
+
+    const https = transport.find((item) => item.check === "HTTPS");
+    points += 20;
+    achieved += https && String(https.value).toLowerCase() === "enabled" ? 20 : 0;
+
+    const protocol = transport.find((item) => item.check === "HTTP Protocol");
+    points += 15;
+    if (protocol) {
+        const value = String(protocol.value || "").toLowerCase();
+        achieved += value.includes("http/3") ? 15 : value.includes("http/2") ? 11 : value.includes("http/1.1") ? 7 : 4;
+    }
+
+    const cacheControl = transport.find((item) => item.check === "Cache Control");
+    points += 20;
+    achieved += cacheControl && !String(cacheControl.value).toLowerCase().includes("not exposed") ? 20 : 6;
+
+    points += 20;
+    achieved += infra.length ? 16 : 8;
+
+    const hostConsistency = domain.find((item) => item.check === "Host Consistency");
+    points += 15;
+    achieved += hostConsistency && String(hostConsistency.value).toLowerCase() === "aligned" ? 15 : 7;
+
+    const serverIdentity = domain.find((item) => item.check === "Server Identity");
+    points += 10;
+    achieved += serverIdentity && !String(serverIdentity.value).toLowerCase().includes("not exposed") ? 10 : 4;
+
+    return Math.round((achieved / points) * 100);
+}
+
+function activateReportTab(tabId) {
+    document.querySelectorAll("[data-report-tab]").forEach((button) => {
+        button.classList.toggle("is-active", button.getAttribute("data-report-tab") === tabId);
+    });
+    document.querySelectorAll("[data-tab-panel]").forEach((panel) => {
+        panel.hidden = panel.getAttribute("data-tab-panel") !== tabId;
+    });
+}
+
+function wireReportTabs() {
+    const buttons = resultsSection.querySelectorAll("[data-report-tab]");
+    if (!buttons.length) {
+        return;
+    }
+    buttons.forEach((button) => {
+        button.addEventListener("click", () => activateReportTab(button.getAttribute("data-report-tab")));
+    });
+    activateReportTab(buttons[0].getAttribute("data-report-tab"));
+}
+
 function renderResult(result) {
     const performance = result.performance_audit || {};
     const seo = result.seo_audit || {};
@@ -241,26 +370,56 @@ function renderResult(result) {
     const categoryScores = result.category_scores || {};
     const crawlSummary = result.crawl_summary || {};
     const websiteDetails = result.website_details || {};
+    const technologySnapshot = result.technology_snapshot || {};
+    const technologyDetection = result.technology_detection || {};
+    const displayObservedVersion = displayVersion(websiteDetails.version || result.version);
+    const displayRecommendedTrack = displayVersion(websiteDetails.recommended_track || result.recommended_cms_version);
     const cmsMatches = Array.isArray(result.cms_matches) ? result.cms_matches : [];
     const pagesScanned = crawlSummary.pages_scanned ?? 1;
+    const infrastructureScore = computeInfrastructureScore(result);
+    const infrastructureTechRows = (result.technology_stack || [])
+        .filter((item) => ["Hosting", "CDN", "Proxy", "Performance"].includes(item.category))
+        .map((item) => [
+            escapeHtml(item.name),
+            escapeHtml(item.category || "Infrastructure"),
+            escapeHtml(item.confidence || "Low"),
+            escapeHtml(item.evidence || "Public signal observed"),
+        ]);
     const componentRows = (result.cms === "WordPress" ? result.plugins : result.modules || [])
         .slice(0, 12)
         .map((item) => [
             escapeHtml(item.name),
-            escapeHtml(item.detected_version),
-            escapeHtml(item.recommended_version),
+            escapeHtml(displayVersion(item.detected_version)),
+            escapeHtml(displayVersion(item.recommended_version)),
+            escapeHtml(item.source || "public"),
+            escapeHtml(item.confidence || "High"),
         ]);
-    const libraryRows = (result.libraries || []).slice(0, 12).map((item) => [
+    const libraryRows = (result.libraries || []).slice(0, 20).map((item) => [
         escapeHtml(item.name),
-        escapeHtml(item.detected_version),
-        escapeHtml(item.recommended_version),
+        escapeHtml(displayVersion(item.detected_version)),
+        escapeHtml(displayVersion(item.recommended_version)),
+        escapeHtml(item.source || "public"),
+        escapeHtml(item.confidence || "High"),
         escapeHtml(item.cve_summary || "No CVE summary"),
     ]);
-    const cmsRows = cmsMatches.map((item) => [
-        escapeHtml(item.name),
+    const cmsRows = (technologySnapshot.secondary_platforms || cmsMatches.filter((item) => String(item.role || "").toLowerCase() !== "primary")).map((item) => [
+        renderEntityIdentity(item.name, "platform"),
         escapeHtml(item.role || "Observed"),
         escapeHtml(item.family || "Unknown"),
         escapeHtml(item.confidence || "Observed"),
+    ]);
+    const primaryEvidenceRows = (technologySnapshot.primary_evidence || []).map((item) => [escapeHtml(item)]);
+    const supportingTechnologyRows = (technologySnapshot.supporting_stack || []).map((item) => [
+        escapeHtml(item.name),
+        escapeHtml(item.category || "Technology"),
+        escapeHtml(item.confidence || "Low"),
+        escapeHtml(item.evidence || "Public signal observed"),
+    ]);
+    const endpointProbeRows = Object.entries(technologyDetection.endpoint_probes || {}).map(([path, probe]) => [
+        escapeHtml(path),
+        escapeHtml(probe.status_code ?? "Not reached"),
+        escapeHtml(probe.ok ? "Reached" : "Unavailable"),
+        escapeHtml(probe.url || "Not captured"),
     ]);
     const performanceRows = ["mobile", "desktop"].map((strategy) => {
         const audit = performance[strategy] || {};
@@ -269,27 +428,28 @@ function renderResult(result) {
         return [
             escapeHtml(strategy[0].toUpperCase() + strategy.slice(1)),
             statusPill(score != null ? `${score}/100` : "N/A", tone),
+            escapeHtml(audit.performance_score != null ? `${audit.performance_score}/100` : "Not detected"),
+            escapeHtml(audit.structure_score != null ? `${audit.structure_score}/100` : "Not detected"),
+            escapeHtml(audit.fully_loaded_time || "Not detected"),
+            escapeHtml(audit.total_page_size || "Not detected"),
+            escapeHtml(audit.total_requests ?? "Not detected"),
             escapeHtml(audit.largest_contentful_paint || "Not available"),
-            escapeHtml(audit.first_contentful_paint || "Not available"),
+            escapeHtml(audit.cumulative_layout_shift || "Not available"),
             escapeHtml(audit.time_to_first_byte || "Not available"),
             escapeHtml(audit.interactive || "Not available"),
             escapeHtml((audit.recommendations || []).join(", ") || "No major opportunity captured"),
         ];
     });
-    const performanceCards = ["mobile", "desktop"].map((strategy) => {
-        const audit = performance[strategy] || {};
-        const score = audit.benchmark_score ?? audit.score;
-        const tone = scoreTone(score);
-        const rawScore = audit.score;
-        return `
-            <article class="card perf-card perf-card-${tone}" style="--score-accent:${scoreColor(score)}; --score-accent-soft:${scoreSoftColor(score)};">
-                <span class="metric-label">${escapeHtml(strategy[0].toUpperCase() + strategy.slice(1))} Score</span>
-                <strong>${escapeHtml(score != null ? `${score}/100` : "N/A")}</strong>
-                ${renderScoreMeter(score)}
-                <small>${escapeHtml((audit.source || "Performance source") + (audit.estimated ? " (estimated)" : ""))}${rawScore != null ? ` · PSI headline: ${escapeHtml(`${rawScore}/100`)}` : ""}</small>
-            </article>
-        `;
-    }).join("");
+    const securityBreakdownRows = (result.score_breakdown || [])
+        .filter((item) => item.category === "Security")
+        .filter((item) => Number(item.impact) !== 0)
+        .map((item) => [
+            escapeHtml(item.label),
+            statusPill(item.priority || "P3", String(item.severity || "monitor").toLowerCase()),
+            escapeHtml(item.detail || ""),
+            escapeHtml(item.action || ""),
+            escapeHtml(item.impact),
+        ]);
     const scoreBreakdownRows = (result.score_breakdown || [])
         .filter((item) => Number(item.impact) !== 0)
         .map((item) => [
@@ -302,7 +462,7 @@ function renderResult(result) {
     const securityRows = (result.security || []).map((item) => [
         escapeHtml(item.header),
         escapeHtml(item.parameter),
-        escapeHtml(item.detected),
+        `<div class="header-detected-clamp">${escapeHtml(item.detected)}</div>`,
         statusPill(item.status, String(item.status || "").toLowerCase()),
     ]);
     const transportRows = (result.transport || []).map((item) => [
@@ -364,7 +524,7 @@ function renderResult(result) {
         {
             label: "Platform",
             value: websiteDetails.platform || result.platform_name || result.cms,
-            note: websiteDetails.version || result.version || "Version not exposed",
+            note: displayObservedVersion,
             tone: "good",
         },
         {
@@ -425,7 +585,7 @@ function renderResult(result) {
         `
         : "";
 
-    resultsSection.innerHTML = `
+    const websiteDetailsSection = `
         ${warningBanner}
         <section class="summary-grid report-topbar">
             <article class="card metric-card metric-card-platform">
@@ -435,25 +595,19 @@ function renderResult(result) {
             </article>
             <article class="card metric-card metric-card-version">
                 <span class="metric-label">Release Track</span>
-                <strong>${escapeHtml(result.version)}</strong>
-                <small>Recommended: ${escapeHtml(result.recommended_cms_version)}</small>
+                <strong>${escapeHtml(displayObservedVersion)}</strong>
+                <small>Recommended: ${escapeHtml(displayRecommendedTrack)}${result.recommended_cms_source ? ` · Source: ${escapeHtml(result.recommended_cms_source)}` : ""}</small>
             </article>
-            <article class="card metric-card metric-card-score" style="--score-accent:${scoreColor(result.score)}; --score-accent-soft:${scoreSoftColor(result.score)};">
-                <span class="metric-label">Website Score</span>
-                <strong>${escapeHtml(result.score)}/100</strong>
-                ${renderScoreMeter(result.score)}
-                <small>${escapeHtml(result.score_label || scoreModel.benchmark_label || result.risk)} · Weighted from SEO 35%, Performance 35%, Security 30%.</small>
-            </article>
+            ${renderCompositeTechnologyScore(result, categoryScores, scoreModel)}
             <article class="card metric-card metric-card-export">
                 <span class="metric-label">Report</span>
                 <strong>Shareable PDF</strong>
                 <button type="button" class="report-export-button" data-export-pdf>Export PDF Report</button>
             </article>
         </section>
-
         <section class="card mt-3">
-            <h2>Website Details</h2>
-            <p class="muted">Scope, identity, platform profile, and exposure inventory for the audited site.</p>
+            <h2>Technology Profile</h2>
+            <p class="muted">A clearer snapshot of the primary platform, the evidence behind it, and the most relevant supporting technologies observed publicly.</p>
             <div class="audit-mini-grid">
                 ${websiteOverviewCards.map((card) => `
                     <article class="card mini-metric mini-metric-${escapeHtml(card.tone)}">
@@ -466,25 +620,26 @@ function renderResult(result) {
             </div>
             <div class="website-details-grid website-details-grid-strong">
                 <article class="detail-note">
-                    <strong>Site Identity</strong>
+                    <strong>Scan Scope</strong>
                     <div class="kv-list">
                         <div class="kv-row"><span>Requested</span><strong>${escapeHtml(websiteDetails.requested_url || result.url)}</strong></div>
                         <div class="kv-row"><span>Resolved</span><strong>${escapeHtml(websiteDetails.resolved_url || result.final_url)}</strong></div>
+                        <div class="kv-row"><span>Pages Reviewed</span><strong>${escapeHtml(websiteDetails.pages_reviewed ?? pagesScanned)}</strong></div>
                         <div class="kv-row"><span>Server</span><strong>${escapeHtml(websiteDetails.server || "Not exposed")}</strong></div>
-                        <div class="kv-row"><span>Generator</span><strong>${escapeHtml(websiteDetails.meta_generator || "Not exposed")}</strong></div>
                     </div>
                 </article>
                 <article class="detail-note">
-                    <strong>Platform Profile</strong>
+                    <strong>Primary Platform Assessment</strong>
                     <div class="kv-list">
                         <div class="kv-row"><span>Primary Platform</span><strong>${escapeHtml(websiteDetails.platform || result.platform_name || result.cms)}</strong></div>
-                        <div class="kv-row"><span>Observed Version</span><strong>${escapeHtml(websiteDetails.version || result.version)}</strong></div>
-                        <div class="kv-row"><span>Recommended Track</span><strong>${escapeHtml(websiteDetails.recommended_track || result.recommended_cms_version)}</strong></div>
-                        <div class="kv-row"><span>CMS Summary</span><strong>${escapeHtml(websiteDetails.cms_summary || result.cms_summary || result.cms)}</strong></div>
+                        <div class="kv-row"><span>Detection Confidence</span><strong>${escapeHtml(websiteDetails.platform_confidence || technologySnapshot.primary_confidence || "Low")}</strong></div>
+                        <div class="kv-row"><span>Observed Version</span><strong>${escapeHtml(displayObservedVersion)}</strong></div>
+                        <div class="kv-row"><span>Recommended Track</span><strong>${escapeHtml(displayRecommendedTrack)}</strong></div>
+                        <div class="kv-row"><span>Summary</span><strong>${escapeHtml(websiteDetails.cms_summary || result.cms_summary || result.cms)}</strong></div>
                     </div>
                 </article>
                 <article class="detail-note">
-                    <strong>Exposure Inventory</strong>
+                    <strong>Profile Inventory</strong>
                     <div class="kv-list">
                         <div class="kv-row"><span>Components Detected</span><strong>${escapeHtml(websiteDetails.components_detected ?? 0)}</strong></div>
                         <div class="kv-row"><span>Libraries Detected</span><strong>${escapeHtml(websiteDetails.libraries_detected ?? 0)}</strong></div>
@@ -495,69 +650,135 @@ function renderResult(result) {
             </div>
             <div class="two-col-grid">
                 <article class="card">
-                    <h3>Platform Signals</h3>
-                    ${renderTable(["Platform", "Role", "Family", "Confidence"], cmsRows)}
+                    <h3>Why This Platform Was Chosen</h3>
+                    ${primaryEvidenceRows.length
+                        ? renderTable(["Observed Public Evidence"], primaryEvidenceRows)
+                        : renderEmptyState("No strong primary evidence captured", "The scan inferred the primary platform from the broader public technology pattern rather than a single exposed vendor marker.")}
                 </article>
                 <article class="card">
-                    <h3>Coverage Note</h3>
-                    <div class="detail-note detail-note-plain">
-                        <p>${escapeHtml(crawlSummary.coverage_note || "Not captured")}</p>
-                    </div>
+                    <h3>Secondary Platform Signals</h3>
+                    ${cmsRows.length
+                        ? renderTable(["Platform", "Role", "Family", "Confidence"], cmsRows)
+                        : renderEmptyState("No secondary platform signal retained", "No second CMS or platform marker was strong enough to report separately from the primary platform.")}
                 </article>
             </div>
             <div class="two-col-grid">
                 <article class="card">
                     <h3>${escapeHtml(result.component_label || "Modules / Extensions")}</h3>
                     ${componentRows.length
-                        ? renderTable(["Name", "Detected Version", "Recommended"], componentRows)
+                        ? renderTable(["Name", "Detected Version", "Recommended", "Source", "Confidence"], componentRows)
                         : renderEmptyState("No major public components captured", "The scan did not expose plugin or module names strongly enough to report them here.")}
                 </article>
                 <article class="card">
                     <h3>Libraries</h3>
                     ${libraryRows.length
-                        ? renderTable(["Name", "Detected Version", "Recommended", "CVE Context"], libraryRows)
-                        : renderEmptyState("No library fingerprint confirmed", "No JavaScript library version was confidently exposed in public assets on the scanned pages.")}
+                        ? renderTable(["Library", "Detected Version", "Recommended", "Source", "Confidence", "CVE Context"], libraryRows)
+                        : renderEmptyState("No library fingerprint confirmed", "Only true client-side libraries are shown here. Frameworks and broader platform signals are kept in the supporting technology area instead of being mixed into this table.")}
+                </article>
+            </div>
+            <div class="two-col-grid">
+                <article class="card">
+                    <h3>Supporting Technology Signals</h3>
+                    ${supportingTechnologyRows.length
+                        ? renderTable(["Technology", "Category", "Confidence", "Evidence"], supportingTechnologyRows)
+                        : renderEmptyState("No distinct supporting signal retained", "Technologies already shown under platform, components, or libraries were not repeated here.")}
+                </article>
+                <article class="card">
+                    <h3>Endpoint Probes</h3>
+                    ${endpointProbeRows.length
+                        ? renderTable(["Endpoint", "Status", "Result", "Final URL"], endpointProbeRows)
+                        : renderEmptyState("No endpoint probe data captured", "Common CMS and feed endpoints were not probed for this scan.")}
+                </article>
+            </div>
+            <div class="two-col-grid">
+                <article class="card">
+                    <h3>Coverage and Source Mix</h3>
+                    <div class="detail-note detail-note-plain">
+                        <p>${escapeHtml(crawlSummary.coverage_note || "Not captured")}</p>
+                        <p><strong>Generator:</strong> ${escapeHtml(websiteDetails.meta_generator || "Not exposed")}</p>
+                        <p><strong>Component sources:</strong> Public ${escapeHtml(technologySnapshot.component_source_summary?.public ?? 0)} · Merged ${escapeHtml(technologySnapshot.component_source_summary?.merged ?? 0)} · External ${escapeHtml(technologySnapshot.component_source_summary?.external ?? 0)}</p>
+                        <p><strong>Library sources:</strong> Public ${escapeHtml(technologySnapshot.library_source_summary?.public ?? 0)} · Merged ${escapeHtml(technologySnapshot.library_source_summary?.merged ?? 0)} · External ${escapeHtml(technologySnapshot.library_source_summary?.external ?? 0)}</p>
+                    </div>
+                </article>
+                <article class="card">
+                    <h3>Detection Method</h3>
+                    <div class="detail-note detail-note-plain">
+                        <p>Pattern matching uses public HTML, headers, linked assets, cookies, and targeted endpoint probes. No deprecated JS runtime is used.</p>
+                    </div>
                 </article>
             </div>
         </section>
+    `;
 
-        <section class="card mt-3">
+    const performanceSection = `
+        <div class="tab-score-strip">
+            ${renderTabScoreCard("Performance Score", categoryScores.performance, "Desktop and mobile combined with a 60/40 weighting.")}
+        </div>
+        <section class="card">
             <h2>Performance Audit</h2>
-            <p class="muted">Mobile and desktop scores are benchmarked against LCP, CLS, FCP, TTFB, INP/TBT, caching, CDN, image, JavaScript, and CSS optimization checks.</p>
+            <p class="muted">Real browser-based performance data is sourced from GTmetrix when configured, with Pingdom or heuristic fallback only when live provider testing is unavailable.</p>
             ${performance.warning ? `<div class="detail-note"><strong>Performance Note</strong><p>${escapeHtml(performance.warning)}</p></div>` : ""}
-            <div class="detail-note detail-note-plain">
-                <p><strong>Weighted Performance Score:</strong> ${escapeHtml(categoryScores.performance != null ? `${categoryScores.performance}/100` : "N/A")}</p>
-                <p>Mobile contributes 60% and desktop contributes 40% to the final performance category score.</p>
-            </div>
-            <div class="perf-grid">
-                ${performanceCards}
-            </div>
-            ${renderTable(["Profile", "Score", "LCP", "FCP", "TTFB", "INP / TBT", "Top Opportunities"], performanceRows)}
-            <div class="two-col-grid mt-3">
-                <article class="card">
-                    <h3>Mobile Benchmark Breakdown</h3>
-                    ${renderPerformanceBreakdown("mobile", performance.mobile)}
-                </article>
-                <article class="card">
-                    <h3>Desktop Benchmark Breakdown</h3>
-                    ${renderPerformanceBreakdown("desktop", performance.desktop)}
-                </article>
-            </div>
+            ${renderTable(["Profile", "Score", "Performance", "Structure", "Fully Loaded", "Page Size", "Requests", "LCP", "CLS", "TTFB", "TBT", "Top Opportunities"], performanceRows)}
+            ${renderPerformanceInsightTables(performance)}
         </section>
+    `;
 
-        <section class="card mt-3">
+    const securitySection = `
+        <div class="tab-score-strip">
+            ${renderTabScoreCard("Security Score", categoryScores.security, "Headers, TLS, cookies, leakage, and vulnerability posture.")}
+        </div>
+        <section class="card">
             <h2>Security Audit</h2>
             <p class="muted">Highest-impact security findings and the controls visible from public responses.</p>
-            ${renderTable(["Factor", "Priority", "Why It Matters", "Recommended Action", "Impact"], scoreBreakdownRows)}
+            ${securityBreakdownRows.length
+                ? renderTable(["Factor", "Priority", "Why It Matters", "Recommended Action", "Impact"], securityBreakdownRows)
+                : renderEmptyState("No security score factor captured", "No security-specific scoring factor was retained for this scan.")}
             <h3 class="mt-3">Recommendations</h3>
             <ul class="recommendations rich-recommendations">
                 ${renderRecommendations(result.recommendations || [])}
             </ul>
         </section>
-
         <section class="card mt-3">
+            <h2>Page Source Leakage</h2>
+            <p class="muted">Public markup, scripts, and low-risk form checks that may reveal internal details or unstable handling.</p>
+            <div class="two-col-grid">
+                <article class="card">
+                    <h3>Public Source Exposure</h3>
+                    ${exposureRows.length
+                        ? renderTable(["Priority", "Finding", "Evidence", "Source"], exposureRows)
+                        : renderEmptyState("No public source leakage captured", "No strong debug trace, sensitive comment, source map, or internal environment reference was confirmed.")}
+                </article>
+                <article class="card">
+                    <h3>Security Headers</h3>
+                    ${renderTable(["Header", "Purpose", "Detected", "Status"], securityRows, "security-headers-table")}
+                </article>
+            </div>
+            <div class="two-col-grid mt-3">
+                <article class="card">
+                    <h3>Forms Discovered</h3>
+                    ${formInventoryRows.length
+                        ? renderTable(["Method", "Action", "Review Status", "Note"], formInventoryRows)
+                        : renderEmptyState("No public form discovered", "No form element was confirmed on the scanned pages.")}
+                </article>
+                <article class="card">
+                    <h3>Forms Probed</h3>
+                    ${formProbeRows.length
+                        ? renderTable(["Form Action", "Status", "Reflected Input", "Detail"], formProbeRows)
+                        : renderEmptyState("No low-risk POST form was probed", crawlSummary.deep_scan_enabled
+                            ? "Discovered forms were either GET-only or looked sensitive, so no probe was attempted."
+                            : "Enable deep scan if you want the audit to evaluate low-risk same-origin POST forms.")}
+                </article>
+            </div>
+        </section>
+    `;
+
+    const infrastructureSection = `
+        <div class="tab-score-strip">
+            ${renderTabScoreCard("Infrastructure Score", infrastructureScore, "Transport, protocol, caching, hosting, and delivery signals.")}
+        </div>
+        <section class="card">
             <h2>Transport, Domain, and Cookie Signals</h2>
-            <p class="muted">Visible browser trust, TLS delivery, domain identity, and cookie hardening signals.</p>
+            <p class="muted">Visible browser trust, TLS delivery, domain identity, protocol support, and cookie hardening signals.</p>
             <div class="two-col-grid">
                 <article class="card">
                     <h3>Transport and TLS</h3>
@@ -579,66 +800,31 @@ function renderResult(result) {
                 </article>
             </div>
         </section>
-
         <section class="card mt-3">
-            <h2>Page Source Leakage</h2>
-            <p class="muted">Public markup, scripts, and low-risk form checks that may reveal internal details or unstable handling.</p>
+            <h2>Infrastructure Signals</h2>
+            <p class="muted">Hosting, CDN, proxy, cache, and edge-delivery evidence only.</p>
             <div class="two-col-grid">
                 <article class="card">
-                    <h3>Public Source Exposure</h3>
-                    ${exposureRows.length
-                        ? renderTable(["Priority", "Finding", "Evidence", "Source"], exposureRows)
-                        : renderEmptyState("No public source leakage captured", "No strong debug trace, sensitive comment, source map, or internal environment reference was confirmed.")}
-                </article>
-                <article class="card">
-                    <h3>Security Headers</h3>
-                    ${renderTable(["Header", "Purpose", "Detected", "Status"], securityRows)}
-                </article>
-            </div>
-            <div class="two-col-grid mt-3">
-                <article class="card">
-                    <h3>Forms Discovered</h3>
-                    ${formInventoryRows.length
-                        ? renderTable(["Method", "Action", "Review Status", "Note"], formInventoryRows)
-                        : renderEmptyState("No public form discovered", "No form element was confirmed on the scanned pages.")}
-                </article>
-                <article class="card">
-                    <h3>Forms Probed</h3>
-                    ${formProbeRows.length
-                        ? renderTable(["Form Action", "Status", "Reflected Input", "Detail"], formProbeRows)
-                        : renderEmptyState("No low-risk POST form was probed", crawlSummary.deep_scan_enabled
-                            ? "Discovered forms were either GET-only or looked sensitive, so no probe was attempted."
-                            : "Enable deep scan if you want the audit to evaluate low-risk same-origin POST forms.")}
-                </article>
-            </div>
-        </section>
-
-        <section class="card mt-3">
-            <h2>Technology Categories</h2>
-            <p class="muted">Grouped technology evidence across infrastructure, platform, frontend, and business tooling.</p>
-            ${renderTechnologySections(result.technology_profile || [])}
-            <div class="insight-grid">
-                <article class="card">
-                    <h3>Edge and Delivery</h3>
-                    ${renderEmptyState("Included in category view", "This category is grouped above under Technology Categories when edge and delivery evidence is present.")}
-                </article>
-                <article class="card">
-                    <h3>Infrastructure</h3>
+                    <h3>Observed Infrastructure</h3>
                     ${infraRows.length
                         ? renderTable(["Component", "Detected", "Recommended"], infraRows)
                         : renderEmptyState("No infrastructure marker captured", "The response headers did not expose a recognizable edge or hosting component.")}
                 </article>
                 <article class="card">
-                    <h3>Visibility</h3>
-                    <div class="detail-note">
-                        <strong>Grouped Sections</strong>
-                        <p>Edge and Delivery, Application Platform, Frontend Experience, Analytics and Marketing, Security and Compliance, and Data and Storage are grouped above when public evidence is available.</p>
-                    </div>
+                    <h3>Infrastructure Technology Evidence</h3>
+                    ${infrastructureTechRows.length
+                        ? renderTable(["Technology", "Type", "Confidence", "Evidence"], infrastructureTechRows)
+                        : renderEmptyState("No infrastructure technology signal retained", "Only infrastructure-related technologies appear here. Non-infrastructure technologies are kept in other sections.")}
                 </article>
             </div>
         </section>
+    `;
 
-        <section class="card mt-3">
+    const seoSection = `
+        <div class="tab-score-strip">
+            ${renderTabScoreCard("SEO Score", categoryScores.seo, "Metadata, crawlability, content structure, and validation.")}
+        </div>
+        <section class="card">
             <h2>SEO Performance</h2>
             <p class="muted">Homepage SEO hygiene and issues repeated across the scanned page set.</p>
             <div class="audit-mini-grid">
@@ -689,11 +875,29 @@ function renderResult(result) {
         </section>
     `;
 
+    resultsSection.innerHTML = `
+        <section class="report-tabs-shell mt-3">
+            <div class="report-tabs" role="tablist" aria-label="Audit report sections">
+                ${renderTabButton("website", "Technology Profile", true)}
+                ${renderTabButton("security", "Security")}
+                ${renderTabButton("performance", "Performance")}
+                ${renderTabButton("infrastructure", "Infrastructure")}
+                ${renderTabButton("seo", "SEO")}
+            </div>
+            <div class="report-tab-panel" data-tab-panel="website">${websiteDetailsSection}</div>
+            <div class="report-tab-panel" data-tab-panel="security" hidden>${securitySection}</div>
+            <div class="report-tab-panel" data-tab-panel="performance" hidden>${performanceSection}</div>
+            <div class="report-tab-panel" data-tab-panel="infrastructure" hidden>${infrastructureSection}</div>
+            <div class="report-tab-panel" data-tab-panel="seo" hidden>${seoSection}</div>
+        </section>
+    `;
+
     latestResult = result;
     if (exportButton) {
         exportButton.hidden = true;
     }
     resultsSection.querySelector("[data-export-pdf]")?.addEventListener("click", exportPdf);
+    wireReportTabs();
 }
 
 function setStatus(message, type = "info") {
@@ -728,7 +932,10 @@ async function runAudit(event) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ url, deep_scan: deepScan }),
         });
-        const result = await response.json();
+        const contentType = response.headers.get("content-type") || "";
+        const result = contentType.includes("application/json")
+            ? await response.json()
+            : { error: await response.text() };
 
         if (!response.ok) {
             throw new Error(result.error || "The audit could not be completed.");
