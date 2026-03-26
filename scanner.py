@@ -363,6 +363,7 @@ def _inventory_forms(pages: list[dict], deep_scan: bool) -> list[dict]:
         for form in soup.find_all("form"):
             method = (form.get("method") or "get").strip().lower() or "get"
             action = urljoin(page_url, form.get("action") or page_url)
+            has_file_upload = bool(form.find("input", attrs={"type": lambda value: value and value.lower() == "file"}))
             key = (page_url, action, method)
             if key in seen:
                 continue
@@ -386,6 +387,10 @@ def _inventory_forms(pages: list[dict], deep_scan: bool) -> list[dict]:
                 status = "Observed only"
                 note = "Deep scan was off, so POST probe was not attempted."
 
+            if has_file_upload:
+                status = "Review needed"
+                note = "File upload input detected; validate file type, size, malware scanning, and storage controls."
+
             inventory.append(
                 {
                     "page_url": page_url,
@@ -393,6 +398,7 @@ def _inventory_forms(pages: list[dict], deep_scan: bool) -> list[dict]:
                     "method": method.upper(),
                     "status": status,
                     "note": note,
+                    "has_file_upload": has_file_upload,
                 }
             )
 
@@ -402,12 +408,26 @@ def _inventory_forms(pages: list[dict], deep_scan: bool) -> list[dict]:
 def _fetch_seo_support_files(final_url: str) -> dict:
     parsed = urlparse(final_url)
     if not parsed.scheme or not parsed.netloc:
-        return {"robots_txt_present": False, "sitemap_present": False, "robots_disallow_all": False}
+        return {
+            "robots_txt_present": False,
+            "sitemap_present": False,
+            "robots_disallow_all": False,
+            "robots_sensitive_paths": [],
+            "security_txt_present": False,
+            "security_txt_url": "",
+        }
 
     base = f"{parsed.scheme}://{parsed.netloc}"
     robots_url = urljoin(base, "/robots.txt")
     sitemap_url = urljoin(base, "/sitemap.xml")
-    result = {"robots_txt_present": False, "sitemap_present": False, "robots_disallow_all": False}
+    result = {
+        "robots_txt_present": False,
+        "sitemap_present": False,
+        "robots_disallow_all": False,
+        "robots_sensitive_paths": [],
+        "security_txt_present": False,
+        "security_txt_url": "",
+    }
 
     try:
         robots_text = fetch_text_asset(robots_url)
@@ -415,6 +435,15 @@ def _fetch_seo_support_files(final_url: str) -> dict:
             result["robots_txt_present"] = True
             lowered = robots_text.lower()
             result["robots_disallow_all"] = "disallow: /" in lowered
+            sensitive_paths = []
+            for line in robots_text.splitlines():
+                stripped = line.strip()
+                lowered_line = stripped.lower()
+                if not lowered_line.startswith("disallow:"):
+                    continue
+                if any(token in lowered_line for token in ("/admin", "/administrator", "/backup", "/private", "/internal", "/upload", "/staging")):
+                    sensitive_paths.append(stripped)
+            result["robots_sensitive_paths"] = sensitive_paths[:5]
             if "sitemap:" in lowered:
                 result["sitemap_present"] = True
     except Exception:
@@ -427,6 +456,16 @@ def _fetch_seo_support_files(final_url: str) -> dict:
                 result["sitemap_present"] = True
         except Exception:
             pass
+
+    for security_path in ("/.well-known/security.txt", "/security.txt"):
+        try:
+            security_text = fetch_text_asset(urljoin(base, security_path))
+            if security_text and ("contact:" in security_text.lower() or "expires:" in security_text.lower()):
+                result["security_txt_present"] = True
+                result["security_txt_url"] = urljoin(base, security_path)
+                break
+        except Exception:
+            continue
 
     return result
 
@@ -733,6 +772,10 @@ def run_scan(url, deep_scan: bool = False):
         "technology_profile": technology_profile,
         "technology_snapshot": technology_snapshot,
         "security": security,
+        "security_txt": {
+            "present": bool(seo_support_files.get("security_txt_present")),
+            "url": seo_support_files.get("security_txt_url", ""),
+        },
         "infra": infra,
         "transport": transport,
         "domain_identity": domain_identity,

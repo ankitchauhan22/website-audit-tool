@@ -1,6 +1,7 @@
 import re
 from bs4 import BeautifulSoup, Comment
 
+EMAIL_PATTERN = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 
 LEAKAGE_PATTERNS = [
     {
@@ -39,6 +40,22 @@ def detect_public_leakage(pages: list[dict]) -> list[dict]:
         html = page.get("html", "") or ""
         page_url = page.get("final_url") or page.get("url") or "Unknown page"
         soup = BeautifulSoup(html, "html.parser")
+
+        email_match = EMAIL_PATTERN.search(html)
+        if email_match:
+            evidence = email_match.group(0)
+            key = ("Email address exposure", evidence.lower())
+            if key not in seen:
+                seen.add(key)
+                findings.append(
+                    {
+                        "name": "Email address exposure",
+                        "severity": "monitor",
+                        "detail": "Public email addresses can increase spam, phishing, and contact-enumeration risk when they are exposed directly in page source.",
+                        "evidence": evidence,
+                        "source_url": page_url,
+                    }
+                )
 
         for pattern in LEAKAGE_PATTERNS:
             match = pattern["pattern"].search(html)

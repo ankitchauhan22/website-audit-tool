@@ -52,6 +52,7 @@ def build_seo_audit(
     robots_txt_present = bool(support_files.get("robots_txt_present"))
     sitemap_present = bool(support_files.get("sitemap_present"))
     robots_disallow_all = bool(support_files.get("robots_disallow_all"))
+    robots_sensitive_paths = list(support_files.get("robots_sensitive_paths") or [])
     parsed_url = urlparse(final_url or "")
     path = (parsed_url.path or "/").strip("/")
     slug_segments = [segment for segment in path.split("/") if segment]
@@ -97,6 +98,8 @@ def build_seo_audit(
             issues.append(f"W3C markup validation reported {markup_validation['errors']} error(s).")
         if markup_validation.get("warnings"):
             issues.append(f"W3C markup validation reported {markup_validation['warnings']} warning(s).")
+    if robots_sensitive_paths:
+        issues.append("robots.txt exposes sensitive-looking paths and should not be used as an access-control mechanism.")
 
     seo_factors = []
 
@@ -157,6 +160,7 @@ def build_seo_audit(
         "internal_link_count": internal_link_count,
         "structured_data_count": structured_data_count,
         "robots_txt_present": robots_txt_present,
+        "robots_sensitive_paths": robots_sensitive_paths,
         "sitemap_present": sitemap_present,
         "url_is_clean": url_is_clean,
         "images_missing_alt": missing_alt,

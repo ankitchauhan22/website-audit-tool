@@ -251,6 +251,82 @@ function renderTechnologySections(sections) {
     `;
 }
 
+function buildSecurityFindingRows(result, securityTxt) {
+    const rows = [];
+
+    (result.security || []).forEach((item) => {
+        if (item.status === "FAIL" || item.status === "PARTIAL") {
+            rows.push([
+                statusPill(item.status === "FAIL" ? "P1" : "P2", item.status === "FAIL" ? "must" : "high"),
+                escapeHtml(item.header),
+                escapeHtml(item.status === "FAIL" ? "Security header is missing." : "Security header is present but weak or incomplete."),
+                escapeHtml(item.detected || "Missing"),
+                escapeHtml("Set a hardened policy/value and confirm it in the production response."),
+            ]);
+        }
+    });
+
+    (result.transport || []).forEach((item) => {
+        const lowered = String(item.value || "").toLowerCase();
+        if (item.check === "TLS Validation" && lowered.includes("failed")) {
+            rows.push([
+                statusPill("P1", "must"),
+                "TLS Validation",
+                "The certificate chain or trust validation did not pass cleanly.",
+                escapeHtml(item.detail || item.value || "Validation failed"),
+                "Fix certificate-chain issues and confirm the site validates without fallback.",
+            ]);
+        }
+        if (item.check === "HTTPS" && lowered !== "enabled") {
+            rows.push([
+                statusPill("P1", "must"),
+                "HTTPS",
+                "HTTPS is not consistently enabled for the audited target.",
+                escapeHtml(item.detail || item.value || "Not enabled"),
+                "Enforce HTTPS across the site and redirect all HTTP traffic permanently.",
+            ]);
+        }
+    });
+
+    (result.cookie_issues || []).forEach((item) => {
+        if (!item.is_insecure) {
+            return;
+        }
+        rows.push([
+            statusPill(item.is_session_like ? "P1" : "P2", item.is_session_like ? "must" : "high"),
+            escapeHtml(item.name),
+            escapeHtml(item.issue || "Cookie hardening issue observed."),
+            escapeHtml(item.is_session_like ? "Session/auth cookie" : "Public cookie"),
+            "Apply Secure, HttpOnly, and SameSite appropriately, especially for session/auth cookies.",
+        ]);
+    });
+
+    if (!securityTxt.present) {
+        rows.push([
+            statusPill("P3", "monitor"),
+            "security.txt",
+            "A security contact policy file was not detected.",
+            "Not detected",
+            "Publish `/.well-known/security.txt` so researchers have a clear reporting path.",
+        ]);
+    }
+
+    (result.libraries || []).forEach((item) => {
+        if (!(item.cves || []).length) {
+            return;
+        }
+        rows.push([
+            statusPill("P2", "high"),
+            escapeHtml(item.name),
+            escapeHtml(`${item.cves.length} mapped CVE(s) matched the exposed version.`),
+            escapeHtml(item.detected_version || "Observed"),
+            "Upgrade or replace the affected library and confirm the public asset version changes after deployment.",
+        ]);
+    });
+
+    return rows;
+}
+
 function signalTone(value) {
     const normalized = String(value || "").toLowerCase();
     if (["enabled", "aligned", "matches hostname", "present", "valid", "healthy"].includes(normalized)) {
@@ -372,6 +448,7 @@ function renderResult(result) {
     const websiteDetails = result.website_details || {};
     const technologySnapshot = result.technology_snapshot || {};
     const technologyDetection = result.technology_detection || {};
+    const securityTxt = result.security_txt || {};
     const displayObservedVersion = displayVersion(websiteDetails.version || result.version);
     const displayRecommendedTrack = displayVersion(websiteDetails.recommended_track || result.recommended_cms_version);
     const cmsMatches = Array.isArray(result.cms_matches) ? result.cms_matches : [];
@@ -465,6 +542,7 @@ function renderResult(result) {
         `<div class="header-detected-clamp">${escapeHtml(item.detected)}</div>`,
         statusPill(item.status, String(item.status || "").toLowerCase()),
     ]);
+    const securityFindingRows = buildSecurityFindingRows(result, securityTxt);
     const transportRows = (result.transport || []).map((item) => [
         escapeHtml(item.check),
         statusPill(item.value, signalTone(item.value)),
@@ -509,6 +587,8 @@ function renderResult(result) {
         ["Meta Description", escapeHtml(seo.meta_description || "Not exposed"), escapeHtml(seo.meta_description === "Not exposed" ? "Missing" : "Observed")],
         ["Canonical", escapeHtml(seo.canonical || "Not exposed"), escapeHtml(seo.canonical === "Not exposed" ? "Missing" : "Observed")],
         ["Robots", escapeHtml(seo.robots || "Not exposed"), escapeHtml(seo.robots || "Not exposed")],
+        ["robots.txt", escapeHtml(seo.robots_txt_present ? "Present" : "Not detected"), escapeHtml((seo.robots_sensitive_paths || []).length ? "Review paths exposed" : "Observed")],
+        ["Sitemap", escapeHtml(seo.sitemap_present ? "Present" : "Not detected"), escapeHtml(seo.sitemap_present ? "Observed" : "Missing")],
         ["Primary H1 Count", escapeHtml(seo.h1_count ?? 0), escapeHtml((seo.h1_count ?? 0) === 1 ? "Healthy" : "Review")],
         ["Images Missing Alt", escapeHtml(seo.images_missing_alt ?? 0), escapeHtml((seo.images_missing_alt ?? 0) === 0 ? "Healthy" : "Review")],
         ["W3C Markup Errors", escapeHtml(markupValidation.errors ?? 0), escapeHtml(markupValidation.checked ? "Validated" : "Not checked")],
@@ -730,6 +810,10 @@ function renderResult(result) {
         <section class="card">
             <h2>Security Audit</h2>
             <p class="muted">Highest-impact security findings and the controls visible from public responses.</p>
+            ${securityFindingRows.length
+                ? renderTable(["Priority", "Finding", "Why It Matters", "Observed", "Recommended Action"], securityFindingRows)
+                : renderEmptyState("No major security finding captured", "The scan did not retain a high-confidence security finding for this target.")}
+            <h3 class="mt-3">Security Score Factors</h3>
             ${securityBreakdownRows.length
                 ? renderTable(["Factor", "Priority", "Why It Matters", "Recommended Action", "Impact"], securityBreakdownRows)
                 : renderEmptyState("No security score factor captured", "No security-specific scoring factor was retained for this scan.")}
@@ -821,9 +905,6 @@ function renderResult(result) {
     `;
 
     const seoSection = `
-        <div class="tab-score-strip">
-            ${renderTabScoreCard("SEO Score", categoryScores.seo, "Metadata, crawlability, content structure, and validation.")}
-        </div>
         <section class="card">
             <h2>SEO Performance</h2>
             <p class="muted">Homepage SEO hygiene and issues repeated across the scanned page set.</p>
@@ -854,13 +935,27 @@ function renderResult(result) {
                 <article class="card">
                     <h3>W3C Validation</h3>
                     ${markupValidation.checked
-                        ? renderTable(
-                            ["Top W3C Markup Issues"],
-                            (markupValidation.messages || []).length
-                                ? markupValidation.messages.map((message) => [escapeHtml(message)])
-                                : [["No top W3C markup issue captured."]]
-                        )
-                        : renderEmptyState("W3C validation unavailable", markupValidation.error || "The validator did not return a result for this URL.")}
+                        ? `
+                            ${renderTable(
+                                ["Type", "Line", "Message"],
+                                (markupValidation.items || []).length
+                                    ? markupValidation.items.map((item) => [
+                                        escapeHtml(item.type || "Issue"),
+                                        escapeHtml(item.line || "N/A"),
+                                        escapeHtml(item.message || ""),
+                                    ])
+                                    : [["Info", "N/A", "No top W3C markup issue captured."]]
+                            )}
+                            ${markupValidation.validator_url
+                                ? `<p class="muted mt-2">Validator source: <a href="${escapeHtml(markupValidation.validator_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(markupValidation.validator_url)}</a></p>`
+                                : ""}
+                        `
+                        : `
+                            ${renderEmptyState("W3C validation unavailable", markupValidation.error || "The validator did not return a result for this URL.")}
+                            ${markupValidation.validator_url
+                                ? `<p class="muted mt-2">Validator endpoint: <a href="${escapeHtml(markupValidation.validator_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(markupValidation.validator_url)}</a></p>`
+                                : ""}
+                        `}
                 </article>
                 <article class="card">
                     <h3>Search Readiness</h3>
@@ -868,6 +963,10 @@ function renderResult(result) {
                         <p><strong>Title:</strong> ${escapeHtml(seo.title || "Not exposed")}</p>
                         <p><strong>Canonical:</strong> ${escapeHtml(seo.canonical || "Not exposed")}</p>
                         <p><strong>Robots:</strong> ${escapeHtml(seo.robots || "Not exposed")}</p>
+                        <p><strong>robots.txt:</strong> ${escapeHtml(seo.robots_txt_present ? "Present" : "Not detected")}</p>
+                        ${(seo.robots_sensitive_paths || []).length
+                            ? `<p><strong>Robots review:</strong> ${escapeHtml((seo.robots_sensitive_paths || []).slice(0, 3).join(" | "))}</p>`
+                            : ""}
                         <p><strong>Language:</strong> ${escapeHtml(seo.lang || "Not exposed")}</p>
                     </div>
                 </article>
